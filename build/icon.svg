@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+ <clipPath id="c"><path d="M512 100c-180 0-262 0-325 63S124 308 124 488v48c0 180 0 262 63 325s145 63 325 63 262 0 325-63 63-145 63-325v-48c0-180 0-262-63-325S692 100 512 100Z"/></clipPath>
+ <linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff8a4c"/><stop offset="1" stop-color="#e4522b"/></linearGradient>
+ <radialGradient id="h" cx=".5" cy="0" r=".9"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".7" stop-color="#fff" stop-opacity="0"/></radialGradient>
+ <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#eef1f6"/></linearGradient>
+ <filter id="s" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000" flood-opacity=".22"/></filter>
+</defs>
+<g clip-path="url(#c)"><rect width="1024" height="1024" fill="url(#t)"/><rect width="1024" height="1024" fill="url(#h)"/></g>
+<path d="M512 100c-180 0-262 0-325 63S124 308 124 488v48c0 180 0 262 63 325s145 63 325 63 262 0 325-63 63-145 63-325v-48c0-180 0-262-63-325S692 100 512 100Z" fill="none" stroke="#fff" stroke-opacity=".18" stroke-width="3"/>
+<rect x="452" y="262" width="300" height="300" rx="76" fill="#fff" fill-opacity=".30"/>
+<rect x="362" y="352" width="300" height="300" rx="76" fill="#fff" fill-opacity=".55" filter="url(#s)"/>
+<g filter="url(#s)"><rect x="272" y="442" width="300" height="300" rx="76" fill="url(#card)"/></g>
+<path d="M352 548 L408 592 L352 636" fill="none" stroke="#e4522b" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M436 636 H494" stroke="#e4522b" stroke-width="30" stroke-linecap="round"/>
+</svg>

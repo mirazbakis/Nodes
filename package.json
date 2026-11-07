@@ -1,0 +1,60 @@
+{
+  "name": "nodes",
+  "productName": "Nodes",
+  "version": "1.0.0",
+  "description": "Nodes: a team of AI coding agents that run on every model, with automatic fallback.",
+  "main": "main.js",
+  "author": "Miraz Bakis",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac dmg zip --arm64 --x64",
+    "pack": "electron-builder --mac dir"
+  },
+  "build": {
+    "appId": "com.athenesoftworks.nodes",
+    "productName": "Nodes",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": "-",
+      "darkModeSupport": true,
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Nodes lets your phone connect to it over your Wi-Fi."
+      },
+      "artifactName": "Nodes-${version}-${arch}-mac.${ext}",
+      "hardenedRuntime": false
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**",
+      "renderer/**",
+      "phone/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "dmg": {
+      "title": "Nodes ${version}",
+      "artifactName": "Nodes-${version}-${arch}.dmg"
+    }
+  },
+  "devDependencies": {
+    "@highlightjs/cdn-assets": "^11.12.0",
+    "dompurify": "^3.4.17",
+    "electron": "^45.2.0",
+    "electron-builder": "^26.18.0",
+    "marked": "^15.0.12"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "repository": "https://github.com/mirazbakis/Nodes",
+  "homepage": "https://github.com/mirazbakis/Nodes"
+}

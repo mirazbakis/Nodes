@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src https: http:; connect-src 'none'" />
+  <title>Nodes</title>
+  <link rel="stylesheet" href="vendor/github-dark.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="splash" class="hidden">
+    <div class="splash-inner">
+      <svg class="splash-logo" viewBox="0 0 120 120" width="120" height="120"></svg>
+      <div class="splash-word">Nodes</div>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+    <nav class="rail drag">
+      <div class="rail-top no-drag">
+        <button class="rail-btn" data-view="home" title="Home  ⌘1"></button>
+        <button class="rail-btn" data-view="chat" title="Chats  ⌘2"></button>
+        <button class="rail-btn" data-view="projects" title="Projects"></button>
+        <button class="rail-btn" data-view="nodes" title="Nodes  ⌘3"></button>
+        <button class="rail-btn" data-view="library" title="Library"></button>
+        <button class="rail-btn" data-view="automations" title="Automations"></button>
+        <button class="rail-btn" data-view="engines" title="Engines  ⌘4"></button>
+        <button class="rail-btn" data-view="activity" title="Activity  ⌘5"></button>
+      </div>
+      <div class="rail-bottom no-drag">
+        <button class="rail-btn" data-action="phone" title="Connect phone"></button>
+        <button class="rail-btn" data-view="settings" title="Settings  ⌘,"></button>
+        <button class="rail-me" data-action="me" title="You"></button>
+      </div>
+    </nav>
+
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head drag">
+        <div class="brand"><span class="brand-mark"></span><span>Nodes</span></div>
+        <div class="sidebar-actions no-drag">
+          <button class="icon-btn" id="btn-search" title="Search chats"></button>
+          <button class="icon-btn" id="btn-new" title="New chat  ⌘N"></button>
+        </div>
+      </div>
+      <div class="sidebar-search hidden" id="search-wrap"><input id="search" placeholder="Search chats" spellcheck="false" /></div>
+      <div class="conv-list" id="conv-list"></div>
+    </aside>
+
+    <main class="main" id="main"></main>
+
+    <section class="browser hidden" id="browser">
+      <div class="browser-bar drag">
+        <div class="browser-nav no-drag">
+          <button class="icon-btn" id="br-back" title="Back"></button>
+          <button class="icon-btn" id="br-fwd" title="Forward"></button>
+          <button class="icon-btn" id="br-reload" title="Reload"></button>
+        </div>
+        <form class="browser-url no-drag" id="br-form"><span id="br-lock"></span><input id="br-url" spellcheck="false" placeholder="Search or enter address" /></form>
+        <div class="browser-nav no-drag">
+          <button class="icon-btn" id="br-ext" title="Open in your browser"></button>
+          <button class="icon-btn" id="br-close" title="Close  ⌘B"></button>
+        </div>
+      </div>
+      <div class="browser-progress" id="br-progress"></div>
+      <div class="browser-body" id="br-body"></div>
+    </section>
+  </div>
+
+  <div id="onboarding" class="hidden"></div>
+  <div id="layer"></div>
+  <div id="toast"></div>
+
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script src="vendor/highlight.min.js"></script>
+  <script src="icons.js"></script>
+  <script src="avatars.js"></script>
+  <script src="app.js"></script>
+  <script src="extras.js"></script>
+</body>
+</html>
