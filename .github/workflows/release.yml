@@ -1,7 +1,8 @@
 name: Release
 
 # Builds Nodes and publishes a GitHub release for the version in package.json.
-# Runs on every push to main; does nothing if that version is already released.
+# Runs on every push to main. If that version is already released, the release
+# is rebuilt and replaced so it always matches the latest commit.
 on:
   push:
     branches: [main]
@@ -9,6 +10,11 @@ on:
 
 permissions:
   contents: write
+
+# A newer push cancels a release build that's still running.
+concurrency:
+  group: release
+  cancel-in-progress: true
 
 jobs:
   release:
@@ -23,11 +29,7 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "exists=false" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         if: steps.version.outputs.exists == 'false'
@@ -47,6 +49,7 @@ jobs:
         if: steps.version.outputs.exists == 'false'
         run: |
           V="${{ steps.version.outputs.version }}"
+          gh release delete "v$V" --cleanup-tag --yes 2>/dev/null || true
           gh release create "v$V" dist/*.dmg dist/*.zip \
             --title "Nodes $V" \
             --notes "A team of AI engineers on your Mac that runs on every model you have, and never stops answering.
