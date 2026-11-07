@@ -12,6 +12,9 @@ const { PhoneServer } = require('./src/phone');
 
 app.setName('Nodes');
 nativeTheme.themeSource = 'dark';
+const IS_MAC = process.platform === 'darwin';
+const IS_WIN = process.platform === 'win32';
+if (IS_WIN) app.setAppUserModelId('com.athenesoftworks.nodes');
 
 // ---------------- storage ----------------
 const dataDir = () => app.getPath('userData');
@@ -144,6 +147,7 @@ function publicState() {
     search: { ...data.search, engines: SEARCH_ENGINES.map((e) => ({ ...e, hasKey: !!keys['search:' + e.id] })) },
     cli: cliScan,
     home: os.homedir(),
+    platform: process.platform,
     usage: data.usage,
     automations: data.automations,
     businessNodes: BUSINESS_NODES,
@@ -178,8 +182,9 @@ let win;
 function createWindow() {
   win = new BrowserWindow({
     width: 1340, height: 860, minWidth: 940, minHeight: 600,
-    titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 19 },
-    vibrancy: 'sidebar', visualEffectState: 'active', backgroundColor: '#00000000', transparent: false,
+    ...(IS_MAC
+      ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 19 }, vibrancy: 'sidebar', visualEffectState: 'active', backgroundColor: '#00000000' }
+      : { titleBarStyle: 'hidden', titleBarOverlay: { color: '#101114', symbolColor: '#b9bac3', height: 52 }, backgroundColor: '#101114', autoHideMenuBar: true }),
     show: false, icon: path.join(__dirname, 'renderer', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: true },
   });
@@ -215,23 +220,28 @@ function createWindow() {
 
 function buildMenu() {
   const send = (ch) => () => win && win.webContents.send('menu', ch);
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      { role: 'appMenu', submenu: [{ role: 'about' }, { type: 'separator' }, { label: 'Settings…', accelerator: 'Cmd+,', click: send('settings') }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
-      { label: 'File', submenu: [{ label: 'New Chat', accelerator: 'Cmd+N', click: send('new') }, { label: 'New Node…', accelerator: 'Cmd+Shift+N', click: send('new-node') }, { label: 'Open Folder for Chat…', accelerator: 'Cmd+O', click: send('folder') }, { type: 'separator' }, { label: 'Export Chat…', accelerator: 'Cmd+E', click: send('export') }, { type: 'separator' }, { role: 'close' }] },
-      { role: 'editMenu' },
-      {
-        label: 'View',
-        submenu: [
-          { label: 'Home', accelerator: 'Cmd+1', click: send('view-home') }, { label: 'Chats', accelerator: 'Cmd+2', click: send('view-chat') }, { label: 'Nodes', accelerator: 'Cmd+3', click: send('view-nodes') }, { label: 'Engines', accelerator: 'Cmd+4', click: send('view-engines') }, { label: 'Activity', accelerator: 'Cmd+5', click: send('view-activity') },
-          { type: 'separator' }, { label: 'Toggle Sidebar', accelerator: 'Cmd+\\', click: send('toggle-sidebar') }, { label: 'Toggle Browser', accelerator: 'Cmd+B', click: send('toggle-browser') },
-          { type: 'separator' }, { role: 'reload' }, { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' },
-        ],
-      },
-      { role: 'windowMenu' },
-      { role: 'help', submenu: [{ label: 'Connect Phone…', click: send('phone') }, { label: 'Run Setup Again…', click: send('onboarding') }] },
-    ])
-  );
+  const settings = { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('settings') };
+  const file = [
+    { label: 'New Chat', accelerator: 'CmdOrCtrl+N', click: send('new') }, { label: 'New Node…', accelerator: 'CmdOrCtrl+Shift+N', click: send('new-node') },
+    { label: 'Open Folder for Chat…', accelerator: 'CmdOrCtrl+O', click: send('folder') }, { type: 'separator' }, { label: 'Export Chat…', accelerator: 'CmdOrCtrl+E', click: send('export') },
+  ];
+  const view = {
+    label: 'View',
+    submenu: [
+      { label: 'Home', accelerator: 'CmdOrCtrl+1', click: send('view-home') }, { label: 'Chats', accelerator: 'CmdOrCtrl+2', click: send('view-chat') }, { label: 'Nodes', accelerator: 'CmdOrCtrl+3', click: send('view-nodes') }, { label: 'Engines', accelerator: 'CmdOrCtrl+4', click: send('view-engines') }, { label: 'Activity', accelerator: 'CmdOrCtrl+5', click: send('view-activity') },
+      { type: 'separator' }, { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+\\', click: send('toggle-sidebar') }, { label: 'Toggle Browser', accelerator: 'CmdOrCtrl+B', click: send('toggle-browser') },
+      { type: 'separator' }, { role: 'reload' }, { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' },
+    ],
+  };
+  const help = { role: 'help', submenu: [{ label: 'Connect Phone…', click: send('phone') }, { label: 'Run Setup Again…', click: send('onboarding') }] };
+  const template = IS_MAC
+    ? [
+        { role: 'appMenu', submenu: [{ role: 'about' }, { type: 'separator' }, settings, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
+        { label: 'File', submenu: [...file, { type: 'separator' }, { role: 'close' }] },
+        { role: 'editMenu' }, view, { role: 'windowMenu' }, help,
+      ]
+    : [{ label: 'File', submenu: [...file, { type: 'separator' }, settings, { type: 'separator' }, { role: 'quit' }] }, { role: 'editMenu' }, view, help];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 // ---------------- phone ----------------
@@ -250,7 +260,7 @@ const phone = new PhoneServer({
   }),
   action: (type, payload) =>
     new Promise((resolve) => {
-      if (!win || win.isDestroyed()) return resolve({ error: 'Nodes is not open on the Mac' });
+      if (!win || win.isDestroyed()) return resolve({ error: 'Nodes is not open on your computer' });
       const id = Math.random().toString(36).slice(2);
       pending.set(id, resolve);
       win.webContents.send('phone:action', { id, type, payload });

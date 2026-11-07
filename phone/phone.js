@@ -28,7 +28,7 @@ const md = (t) => DOMPurify.sanitize(marked.parse(t || ''));
 
 function showPair(err) {
   const code = (location.hash.match(/pair=(\d+)/) || [])[1] || '';
-  root.innerHTML = `<div class="screen"><div class="pair"><div><img src="/icon.png" width="84" height="84" style="border-radius:20px"><h1>Connect to Nodes</h1><p>Enter the 6-digit code shown on your Mac under Settings, then Phone.</p>
+  root.innerHTML = `<div class="screen"><div class="pair"><div><img src="/icon.png" width="84" height="84" style="border-radius:20px"><h1>Connect to Nodes</h1><p>Enter the 6-digit code shown in Nodes on your computer under Settings, then Phone.</p>
     <input id="code" inputmode="numeric" maxlength="6" value="${esc(code)}" placeholder="000000"><br><button class="btn" id="go">Connect</button>${err ? `<p class="err" style="margin-top:14px">${esc(err)}</p>` : ''}</div></div></div>`;
   const go = async () => {
     const r = await fetch('/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: document.getElementById('code').value.trim(), name: /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad/.test(navigator.userAgent) ? 'iPad' : /Android/.test(navigator.userAgent) ? 'Android phone' : 'Phone' }) });
@@ -45,7 +45,7 @@ function showPair(err) {
 
 function listView() {
   const convs = [...state.conversations].sort((a, b) => (b.nodeIds.length > 1 && b.title === 'Team') - (a.nodeIds.length > 1 && a.title === 'Team') || b.updatedAt - a.updatedAt);
-  root.innerHTML = `<div class="screen"><div class="head"><img src="/icon.png" width="28" height="28" style="border-radius:7px"><h1>Nodes</h1></div>${online ? '' : '<div class="offline">Reconnecting to your Mac…</div>'}
+  root.innerHTML = `<div class="screen"><div class="head"><img src="/icon.png" width="28" height="28" style="border-radius:7px"><h1>Nodes</h1></div>${online ? '' : '<div class="offline">Reconnecting to your computer…</div>'}
     <div class="list"><div class="nodes">${state.nodes.map((n) => `<button data-new="${n.id}">${nodeAvatar(n.avatar, 50)}${esc(n.name)}</button>`).join('')}</div>
     <div class="sec">Chats</div>${convs.map((c) => `<button class="row" data-open="${c.id}">${convAv(c, 48)}<div class="b"><div class="top"><b>${esc(c.title && c.nodeIds.length > 1 ? c.title : nodeById(c.nodeIds[0]).name)}</b><span class="time">${timeLabel(c.updatedAt)}</span></div><div class="p">${esc((c.preview || '').replace(/[#*`>_]/g, ''))}</div></div></button>`).join('')}</div></div>`;
   root.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openConv(b.dataset.open)));
@@ -92,7 +92,7 @@ function chatView(scroll) {
   }
   root.dataset.conv = conv.id;
   const draft = document.getElementById('in')?.value || '';
-  root.innerHTML = `<div class="screen"><div class="head"><button class="back" id="back">‹</button>${convAv(conv, 34)}<div class="t"><b>${esc(title)}</b><span>${multi ? conv.nodeIds.length + ' nodes' : esc(nodeById(conv.nodeIds[0]).tagline || '')}</span></div></div>${online ? '' : '<div class="offline">Reconnecting to your Mac…</div>'}
+  root.innerHTML = `<div class="screen"><div class="head"><button class="back" id="back">‹</button>${convAv(conv, 34)}<div class="t"><b>${esc(title)}</b><span>${multi ? conv.nodeIds.length + ' nodes' : esc(nodeById(conv.nodeIds[0]).tagline || '')}</span></div></div>${online ? '' : '<div class="offline">Reconnecting to your computer…</div>'}
     <div class="thread">${msgs}</div>
     <div class="composer"><textarea id="in" rows="1" placeholder="Message">${esc(draft)}</textarea><button class="send ${busy ? 'stop' : ''}" id="send">${busy ? '■' : '↑'}</button></div></div>`;
   const t = document.querySelector('.thread');

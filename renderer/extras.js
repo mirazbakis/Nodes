@@ -407,7 +407,7 @@ function openPalette() {
   input.focus();
 }
 document.addEventListener('keydown', (e) => {
-  if (e.metaKey && e.key.toLowerCase() === 'k') {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     openPalette();
   }

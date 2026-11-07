@@ -2,14 +2,15 @@
   "name": "nodes",
   "productName": "Nodes",
   "version": "1.0.0",
-  "description": "Nodes: a team of AI coding agents that run on every model, with automatic fallback.",
+  "description": "Nodes: a team of AI coding agents that runs on every model you have, with automatic fallback. For macOS and Windows.",
   "main": "main.js",
   "author": "Miraz Bakis",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --mac dmg zip --arm64 --x64",
-    "pack": "electron-builder --mac dir"
+    "pack": "electron-builder --mac dir",
+    "dist:win": "electron-builder --win"
   },
   "build": {
     "appId": "com.athenesoftworks.nodes",
@@ -43,6 +44,38 @@
     "dmg": {
       "title": "Nodes ${version}",
       "artifactName": "Nodes-${version}-${arch}.dmg"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "Nodes-${version}-${arch}-win.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Nodes",
+      "artifactName": "Nodes-${version}-${arch}-setup.${ext}",
+      "uninstallDisplayName": "Nodes"
+    },
+    "portable": {
+      "artifactName": "Nodes-${version}-portable.${ext}"
     }
   },
   "devDependencies": {

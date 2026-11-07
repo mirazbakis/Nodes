@@ -5,6 +5,10 @@ const os = require('os');
 const path = require('path');
 
 const HOME = os.homedir();
+const IS_WIN = process.platform === 'win32';
+const SEP = IS_WIN ? ';' : ':';
+// Per-platform install/sign-in commands. A value starting with "url:" opens a web page instead.
+const plat = (mac, win) => (IS_WIN ? win : mac);
 
 const CLIS = [
   {
@@ -19,9 +23,10 @@ const CLIS = [
   {
     id: 'claude-code', name: 'Claude Code', bin: 'claude', vendor: 'Anthropic',
     blurb: 'Anthropic\'s coding agent. Uses your Claude plan.',
-    install: 'curl -fsSL https://claude.ai/install.sh | bash', login: 'claude /login',
+    install: plat('curl -fsSL https://claude.ai/install.sh | bash', 'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://claude.ai/install.ps1 | iex"'), login: plat('claude /login', 'claude'),
     status: async () => {
       if (fs.existsSync(path.join(HOME, '.claude', '.credentials.json'))) return { signedIn: true };
+      if (IS_WIN) return { signedIn: false };
       const ok = await new Promise((r) => execFile('/usr/bin/security', ['find-generic-password', '-s', 'Claude Code-credentials'], (e) => r(!e)));
       return { signedIn: ok };
     },
@@ -50,7 +55,7 @@ const CLIS = [
   {
     id: 'cursor-agent', name: 'Cursor', bin: 'cursor-agent', vendor: 'Cursor',
     blurb: 'Cursor\'s agent in the terminal. Uses your Cursor plan.',
-    install: 'curl https://cursor.com/install -fsS | bash', login: 'cursor-agent login',
+    install: plat('curl https://cursor.com/install -fsS | bash', 'url:https://cursor.com/cli'), login: 'cursor-agent login',
     status: async (bin) => ({ signedIn: /logged in/i.test(await run(bin, ['status'])) }),
   },
   {
@@ -62,7 +67,7 @@ const CLIS = [
   {
     id: 'ollama-app', name: 'Ollama', bin: 'ollama', vendor: 'Local',
     blurb: 'Run open models on this Mac. Private and unlimited.',
-    install: 'brew install ollama', login: 'open -a Ollama',
+    install: plat('brew install ollama', 'url:https://ollama.com/download/windows'), login: plat('open -a Ollama', 'ollama serve'),
     status: async () => {
       try {
         const r = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(1500) });
@@ -79,6 +84,12 @@ const byId = Object.fromEntries(CLIS.map((c) => [c.id, c]));
 // ---------- PATH resolution (GUI apps get a tiny PATH) ----------
 let extraPath = null;
 function searchDirs() {
+  if (IS_WIN) {
+    const A = process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming');
+    const L = process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local');
+    const PF = process.env.ProgramFiles || 'C:\\Program Files';
+    return [path.join(A, 'npm'), path.join(HOME, '.local', 'bin'), path.join(PF, 'nodejs'), path.join(L, 'Programs', 'Ollama'), path.join(L, 'cursor-agent'), path.join(HOME, '.bun', 'bin'), path.join(HOME, 'scoop', 'shims'), path.join(L, 'Microsoft', 'WinGet', 'Links'), path.join(L, 'Volta', 'bin'), path.join(HOME, '.opencode', 'bin')];
+  }
   const dirs = [path.join(HOME, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin', path.join(HOME, '.npm-global', 'bin'), path.join(HOME, '.bun', 'bin'), path.join(HOME, '.cursor', 'bin'), path.join(HOME, '.claude', 'local'), path.join(HOME, '.opencode', 'bin')];
   try {
     const nvm = path.join(HOME, '.nvm', 'versions', 'node');
@@ -87,6 +98,7 @@ function searchDirs() {
   return dirs;
 }
 async function loginShellPath() {
+  if (IS_WIN) return '';
   if (extraPath !== null) return extraPath;
   extraPath = await new Promise((resolve) => {
     execFile(process.env.SHELL || '/bin/zsh', ['-ilc', 'echo -n "__P__$PATH"'], { timeout: 4000 }, (e, out) => {
@@ -96,27 +108,57 @@ async function loginShellPath() {
   });
   return extraPath;
 }
+const sysPath = () => process.env.PATH || process.env.Path || '';
 async function envPath() {
-  const parts = [...searchDirs(), ...(await loginShellPath()).split(':'), ...(process.env.PATH || '').split(':'), '/usr/bin', '/bin'];
-  return [...new Set(parts.filter(Boolean))].join(':');
+  const parts = [...searchDirs(), ...(await loginShellPath()).split(SEP), ...sysPath().split(SEP), ...(IS_WIN ? [] : ['/usr/bin', '/bin'])];
+  return [...new Set(parts.filter(Boolean))].join(SEP);
 }
 async function which(bin) {
-  for (const d of (await envPath()).split(':')) {
-    const p = path.join(d, bin);
-    try {
-      fs.accessSync(p, fs.constants.X_OK);
-      return p;
-    } catch {}
+  const exts = IS_WIN ? ['.exe', '.cmd', '.bat'] : [''];
+  for (const d of (await envPath()).split(SEP)) {
+    for (const ext of exts) {
+      const p = path.join(d, bin + ext);
+      try {
+        if (IS_WIN) {
+          if (fs.statSync(p).isFile()) return p;
+        } else {
+          fs.accessSync(p, fs.constants.X_OK);
+          return p;
+        }
+      } catch {}
+    }
   }
   return null;
 }
 async function childEnv() {
-  return { ...process.env, PATH: await envPath(), NO_COLOR: '1', FORCE_COLOR: '0', GEMINI_CLI_TRUST_WORKSPACE: 'true' };
+  const env = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', GEMINI_CLI_TRUST_WORKSPACE: 'true' };
+  for (const k of Object.keys(env)) if (k.toLowerCase() === 'path') delete env[k];
+  env[IS_WIN ? 'Path' : 'PATH'] = await envPath();
+  return env;
+}
+
+// On Windows, npm installs CLIs as .cmd shims, which Node can't start without a shell.
+// Starting the shim's JavaScript target with node directly avoids the shell entirely,
+// so prompts are never parsed by cmd.exe.
+async function resolveLaunch(bin, args) {
+  if (!IS_WIN || !/\.(cmd|bat)$/i.test(bin)) return { cmd: bin, args, shell: false };
+  try {
+    const shim = fs.readFileSync(bin, 'utf8');
+    const m = shim.match(/"%~?dp0%?\\([^"]+?\.[cm]?js)"/i);
+    if (m) {
+      const target = path.join(path.dirname(bin), m[1]);
+      const local = path.join(path.dirname(bin), 'node.exe');
+      const node = fs.existsSync(local) ? local : await which('node');
+      if (node && fs.existsSync(target)) return { cmd: node, args: [target, ...args], shell: false };
+    }
+  } catch {}
+  return { cmd: bin, args, shell: true };
 }
 
 function run(bin, args, ms = 8000) {
   return new Promise(async (resolve) => {
-    execFile(bin, args, { timeout: ms, env: await childEnv() }, (e, out, err) => resolve(String(out || '') + String(err || '')));
+    const l = await resolveLaunch(bin, args);
+    execFile(l.cmd, l.args, { timeout: ms, env: await childEnv(), shell: l.shell, windowsHide: true }, (e, out, err) => resolve(String(out || '') + String(err || '')));
   });
 }
 
@@ -137,13 +179,24 @@ async function scan() {
   );
 }
 
-// Opens Terminal running a command, via a .command file (no automation permission needed).
+// Opens a terminal window running a command: Terminal via a .command file on macOS
+// (no automation permission needed), Command Prompt via a .cmd file on Windows.
+// Commands starting with "url:" open a web page instead.
 async function openInTerminal(command, title) {
+  const { shell } = require('electron');
+  if (command.startsWith('url:')) return shell.openExternal(command.slice(4));
   const dir = path.join(os.tmpdir(), 'nodes-commands');
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${title.replace(/\W+/g, '-')}-${Date.now()}.command`);
+  const base = path.join(dir, `${title.replace(/\W+/g, '-')}-${Date.now()}`);
+  if (IS_WIN) {
+    const file = base + '.cmd';
+    const env = await envPath();
+    fs.writeFileSync(file, `@echo off\r\ntitle Nodes: ${title}\r\nset "Path=${env}"\r\necho Nodes: ${title}\r\necho.\r\n${command}\r\necho.\r\necho Done. You can close this window and go back to Nodes.\r\npause\r\n`);
+    await shell.openPath(file);
+    return;
+  }
+  const file = base + '.command';
   fs.writeFileSync(file, `#!/bin/zsh -il\nclear\necho "Nodes: ${title}"\necho "Running: ${command.replace(/"/g, '\\"')}"\necho\n${command}\necho\necho "Done. You can close this window and go back to Nodes."\n`, { mode: 0o755 });
-  const { shell } = require('electron');
   await shell.openPath(file);
 }
 
@@ -154,6 +207,8 @@ function buildPrompt(system, messages) {
   let p = `${system}\n\n`;
   if (earlier.length) p += `Conversation so far:\n${earlier.map((m) => `${m.role === 'user' ? 'User' : 'You'}: ${m.content}`).join('\n\n')}\n\n`;
   p += `Latest message from the user:\n${last ? last.content : ''}`;
+  // Windows caps a command line at about 32,000 characters, so keep the newest part.
+  if (IS_WIN && p.length > 24000) p = system.slice(0, 6000) + '\n\n[Earlier conversation trimmed]\n\n' + p.slice(-(24000 - Math.min(system.length, 6000)));
   return p;
 }
 
@@ -219,8 +274,11 @@ async function runCli({ id, model, system, messages, cwd, allowEdits, signal, on
   const bin = await which(meta.bin);
   if (!bin) throw Object.assign(new Error(`${meta.name} isn't installed`), { cooldown: 600 });
   const prompt = buildPrompt(system, messages);
-  const child = spawn(bin, argsFor(id, prompt, { allowEdits, model }), { cwd: cwd || HOME, env: await childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
-  const kill = () => child.kill('SIGTERM');
+  const launch = await resolveLaunch(bin, argsFor(id, prompt, { allowEdits, model }));
+  if (launch.shell) throw Object.assign(new Error(`${meta.name} can't be started safely on this PC`), { cooldown: 3600 });
+  const child = spawn(launch.cmd, launch.args, { cwd: cwd || HOME, env: await childEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  // On Windows, kill the whole process tree (CLIs start helper processes of their own).
+  const kill = () => (IS_WIN && child.pid ? execFile('taskkill', ['/pid', String(child.pid), '/t', '/f'], () => {}) : child.kill('SIGTERM'));
   signal.addEventListener('abort', kill);
   let buf = '';
   let errBuf = '';

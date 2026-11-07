@@ -505,3 +505,12 @@ table.stats tr:last-child td { border-bottom: 0; }
 .part-row[style*="none"] button { text-transform: none; }
 .splash-logo { animation: splashPop .7s var(--ease) both; filter: drop-shadow(0 24px 50px rgba(27,79,168,.45)); }
 @keyframes splashPop { 0% { transform: scale(.6) translateY(10px); opacity: 0; } 60% { transform: scale(1.06); opacity: 1; } 100% { transform: none; } }
+
+/* ---------------- Windows ---------------- */
+html.win .rail { padding-top: 14px; }
+html.win .topbar, html.win .browser-bar { padding-right: 150px; }
+html.win .sidebar.collapsed ~ .main .topbar { padding-left: 20px; }
+html.win .ob-top { padding-right: 140px; }
+html.win body { font-family: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, system-ui, sans-serif; }
+html.win { --display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif; --mono: 'Cascadia Code', Consolas, ui-monospace, monospace; }
+html.win ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); background-clip: content-box; border: 3px solid transparent; }
