@@ -70,12 +70,13 @@ function defaults() {
       onboarded: false, userName: '', callMe: '', about: '', accent: '#4c8dff',
       autoFallback: true, firstTokenTimeout: 30, idleTimeout: 60, maxAttempts: 12, sendOnEnter: true, showRouting: true,
       browserAutoOpen: true, readPages: true, launchAnimation: true, phoneEnabled: false, defaultFolder: '',
-      redactSecrets: true, localOnly: false, usageWarnings: true,
+      redactSecrets: true, localOnly: false, usageWarnings: true, saver: true,
     },
     devices: [],
     stats: {},
     usage: {},
     automations: [],
+    companies: [],
   };
 }
 
@@ -98,6 +99,7 @@ function load() {
   data.stats = data.stats || {};
   data.usage = data.usage || {};
   data.automations = data.automations || [];
+  data.companies = data.companies || [];
   try {
     const raw = fs.readFileSync(keyFile());
     keys = JSON.parse(safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(raw) : raw.toString('utf8'));
@@ -143,6 +145,8 @@ function publicState() {
     })),
     providerOrder: data.providerOrder,
     nodes: data.nodes,
+    companies: data.companies,
+    saved: data.saved || { calls: 0 },
     defaultNodes: NODES,
     teamId: TEAM_ID,
     conversations: data.conversations,
@@ -351,8 +355,10 @@ ipcMain.handle('node:delete', (_e, id) => {
   save();
   return data.nodes;
 });
-ipcMain.handle('node:create', (_e, role, name, avatar) => {
+ipcMain.handle('node:create', (_e, role, name, avatar, extra = {}) => {
   const n = makeNode(role, name, avatar ? { avatar } : {});
+  if (extra.companyId) n.companyId = extra.companyId;
+  if (extra.team) n.team = extra.team;
   data.nodes.push(n);
   save();
   return { nodes: data.nodes, node: n };
@@ -561,7 +567,8 @@ ipcMain.handle('chat:start', async (e, req) => {
   const callMe = data.settings.callMe || data.settings.userName || 'the user';
   const permission = ['ask', 'edit', 'plan', 'full'].includes(req.permission) ? req.permission : 'ask';
   const thinking = ['off', 'low', 'medium', 'high'].includes(req.thinking) ? req.thinking : 'low';
-  const cwd = req.folder || data.settings.defaultFolder || tools.defaultWorkspace(node.name);
+  const company = node.companyId && data.companies.find((c) => c.id === node.companyId);
+  const cwd = req.folder || (company && companyDir(company)) || data.settings.defaultFolder || tools.defaultWorkspace(node.name);
   try {
     fs.mkdirSync(cwd, { recursive: true });
   } catch {}
@@ -576,7 +583,7 @@ ipcMain.handle('chat:start', async (e, req) => {
     plan: 'Permission mode is "Plan first": do not change anything. Look around if useful (read files, search), then reply with a short numbered plan and ask whether to go ahead.',
     full: 'Permission mode is "Full trust": you can change files and run commands without asking. Be careful and explain what you did.',
   }[permission];
-  const apps = Object.entries(connected).filter(([, v]) => v).map(([k]) => ({ github: 'GitHub', google: 'Gmail, Google Drive and Google Calendar', notion: 'Notion' })[k]);
+  const apps = Object.entries(connected).filter(([, v]) => v).map(([k]) => ({ github: 'GitHub', google: 'Gmail, Google Drive and Google Calendar' })[k]);
   system += `\n\nHOW YOU WORK
 - You're an agent running on ${callMe}'s computer, chatting with them in an iMessage-style app. Write like a thoughtful person texting: warm, natural and to the point. Short paragraphs; Markdown only when it helps (code, steps, tables).
 - Have a normal conversation. If ${callMe} asks a question or wants your view, just answer it. Don't create files, run commands or start building unless they ask you to make, build, fix or change something.
@@ -590,6 +597,20 @@ ipcMain.handle('chat:start', async (e, req) => {
   if (thinking === 'high') system += '\n- Think carefully, consider alternatives and check your work before answering.';
   if (thinking === 'off') system += '\n- Be quick: answer directly without long deliberation.';
   if (req.lowercase) system += `\n- ${callMe} is writing in all lowercase, so reply entirely in lowercase too, casual like them. Code, file names, URLs and identifiers stay exactly as they are.`;
+  if (company) {
+    const mates = data.nodes.filter((n) => n.companyId === company.id && n.id !== node.id).map((n) => `${n.name} (${n.title}${n.team ? ', ' + n.team : ''})`);
+    system += `\n\nCOMPANY: you work at ${company.name}${company.what ? ', ' + company.what : ''}.`;
+    if (company.stage) system += ` Stage: ${company.stage}.`;
+    if (company.goals) system += `\nGoals right now: ${company.goals}`;
+    if (company.voice) system += `\nBrand voice: ${company.voice}`;
+    if (company.audience) system += `\nCustomers: ${company.audience}`;
+    if (mates.length) system += `\nYour colleagues (other nodes): ${mates.join(', ')}.`;
+    system += `\nThe company wiki is the Docs folder in your workspace: Markdown pages ${callMe} and the team share. Read the relevant pages before bigger work (list_files Docs). When you make a decision, finish a deliverable or learn something the team should know, save it there as a clear page (write_file Docs/<Title>.md) and mention it. Keep pages tidy: update an existing page rather than making a near-duplicate.`;
+    try {
+      const docs = fs.readdirSync(path.join(cwd, 'Docs')).filter((f) => f.endsWith('.md')).slice(0, 40);
+      if (docs.length) system += `\nPages in Docs: ${docs.map((f) => f.slice(0, -3)).join(', ')}.`;
+    } catch {}
+  }
   if (req.roomNote) system += '\n\n' + req.roomNote;
   emit({ type: 'system', chars: system.length });
 
@@ -606,10 +627,11 @@ ipcMain.handle('chat:start', async (e, req) => {
   const google = { get: () => JSON.parse(keys['conn:google'] || 'null'), set: (v) => ((keys['conn:google'] = JSON.stringify(v)), saveKeys()) };
   const toolCtx = {
     cwd, permission, env, signal: ctrl.signal, emit, connected, google,
-    tokens: { github: keys['conn:github'], notion: keys['conn:notion'] },
+    tokens: { github: keys['conn:github'] },
     approve: (o) => ask('approve', o).then((v) => v === true),
     ask: (o) => ask('ask', o),
     react: (emoji) => emit({ type: 'react', emoji }),
+    browser: (action, args) => ask('browser', { action, args }),
     openUrl: (url) => win && !win.isDestroyed() && win.webContents.send('browser:open', url),
     search: async (q) => {
       const r = await search(q, searchCfg());
@@ -630,6 +652,23 @@ ipcMain.handle('chat:start', async (e, req) => {
     if (!chain.length) {
       for (const id of ['ollama', 'lmstudio']) if (engine.usable(byId[id], { ...data.providers[id], enabled: true }, null)) chain.push({ provider: id, model: data.providers[id].defaultModel });
       if (!chain.length) chain = [{ provider: 'ollama', model: data.providers.ollama.defaultModel || 'llama3.2' }];
+    }
+  }
+  // Usage saver: quick questions go to fast pay-as-you-go/free engines first and save the
+  // coding-agent subscriptions (Codex, Claude Code...) for real work.
+  if (data.settings.saver && !pinned && chain.length > 1) {
+    const last = [...messages].reverse().find((m) => m.role === 'user');
+    const q = String(last?.content || '');
+    const heavy = q.length > 320 || /```|\b(build|make|create|fix|implement|refactor|deploy|debug|code|write (a|the|me)|app|website|site|script|repo|project|file)\b/i.test(q) || !!req.roomNote;
+    if (!heavy) {
+      const isCli = (c) => byId[c.provider]?.kind === 'cli';
+      const lite = chain.filter((c) => !isCli(c));
+      if (lite.length && isCli(chain[0])) {
+        chain = [...lite, ...chain.filter(isCli)];
+        data.saved = data.saved || { calls: 0 };
+        data.saved.calls++;
+        emit({ type: 'tool', text: `Saver(quick question, sent to ${byId[chain[0].provider].name} to save your ${byId[chain[lite.length]?.provider]?.name || 'subscription'} usage)` });
+      }
     }
   }
   // Engines known to be out of quota go last.
@@ -659,7 +698,7 @@ ipcMain.on('agent:reply', (_e, { id, value }) => {
   }
 });
 function connectedApps() {
-  return { github: !!keys['conn:github'], google: !!keys['conn:google'], notion: !!keys['conn:notion'] };
+  return { github: !!keys['conn:github'], google: !!keys['conn:google'] };
 }
 ipcMain.handle('apps:state', async () => {
   const d = await preview.dockerStatus(cli.which);
@@ -681,11 +720,6 @@ async function connectToken(id, token) {
       if (!r.ok) throw new Error(r.status === 401 ? 'GitHub rejected that token' : 'GitHub error ' + r.status);
       const u = await r.json();
       data.connections.github = { login: u.login, name: u.name || u.login, at: Date.now() };
-    } else if (id === 'notion') {
-      const r = await fetch('https://api.notion.com/v1/users/me', { headers: { Authorization: `Bearer ${token}`, 'Notion-Version': '2022-06-28' } });
-      if (!r.ok) throw new Error(r.status === 401 ? 'Notion rejected that secret' : 'Notion error ' + r.status);
-      const u = await r.json();
-      data.connections.notion = { name: u.bot?.workspace_name || u.name || 'Notion', at: Date.now() };
     }
     keys['conn:' + id] = token;
     saveKeys();
@@ -759,6 +793,74 @@ ipcMain.handle('preview:start', async (_e, dir) => {
   }
 });
 ipcMain.handle('workspace:default', (_e, nodeName) => tools.defaultWorkspace(nodeName));
+
+// ---------------- companies & docs ----------------
+function companyDir(c) {
+  return path.join(os.homedir(), 'Nodes', String(c.name || 'Company').replace(/[^\w .-]/g, '').trim() || 'Company');
+}
+ipcMain.handle('company:save', (_e, c) => {
+  const i = data.companies.findIndex((x) => x.id === c.id);
+  if (i === -1) data.companies.push(c);
+  else data.companies[i] = c;
+  try {
+    fs.mkdirSync(path.join(companyDir(c), 'Docs'), { recursive: true });
+  } catch {}
+  save();
+  return { companies: data.companies, dir: companyDir(c) };
+});
+ipcMain.handle('company:delete', (_e, id) => {
+  data.companies = data.companies.filter((c) => c.id !== id);
+  for (const n of data.nodes) if (n.companyId === id) delete n.companyId;
+  save();
+  return { companies: data.companies, nodes: data.nodes };
+});
+ipcMain.handle('company:dir', (_e, id) => {
+  const c = data.companies.find((x) => x.id === id);
+  return c ? companyDir(c) : null;
+});
+const nodesRoot = () => path.join(os.homedir(), 'Nodes');
+function docsDir(dir) {
+  const d = path.resolve(dir, 'Docs');
+  if (!d.startsWith(nodesRoot() + path.sep)) throw new Error('Docs must live inside ~/Nodes');
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+}
+const docFile = (dir, name) => path.join(docsDir(dir), String(name).replace(/[\\/:*?"<>|]/g, '-').replace(/\.md$/, '').trim().slice(0, 90) + '.md');
+ipcMain.handle('docs:list', (_e, dir) => {
+  try {
+    const d = docsDir(dir);
+    return fs.readdirSync(d).filter((f) => f.endsWith('.md')).map((f) => {
+      const st = fs.statSync(path.join(d, f));
+      const head = fs.readFileSync(path.join(d, f), 'utf8').slice(0, 220);
+      return { name: f.slice(0, -3), mtime: st.mtimeMs, size: st.size, head };
+    }).sort((a, b) => b.mtime - a.mtime);
+  } catch {
+    return [];
+  }
+});
+ipcMain.handle('docs:read', (_e, dir, name) => {
+  try {
+    return fs.readFileSync(docFile(dir, name), 'utf8');
+  } catch {
+    return '';
+  }
+});
+ipcMain.handle('docs:write', (_e, dir, name, text, oldName) => {
+  const f = docFile(dir, name);
+  fs.writeFileSync(f, String(text ?? ''));
+  if (oldName && oldName !== name) {
+    try {
+      fs.unlinkSync(docFile(dir, oldName));
+    } catch {}
+  }
+  return true;
+});
+ipcMain.handle('docs:delete', (_e, dir, name) => {
+  try {
+    shell.trashItem(docFile(dir, name));
+  } catch {}
+  return true;
+});
 ipcMain.handle('chat:stop', (_e, reqId) => {
   const c = running.get(reqId);
   if (c) c.abort();

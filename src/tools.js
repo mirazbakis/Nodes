@@ -28,7 +28,11 @@ function defs({ web, connected }) {
     t.push(
       { name: 'web_search', description: 'Search the web. Write your own precise query (keywords, product names, versions, year); do not just paste the user message.', parameters: S({ query: str('Search query') }, ['query']) },
       { name: 'read_webpage', description: 'Fetch a web page and return its readable text.', parameters: S({ url: str('Full URL') }, ['url']) },
-      { name: 'open_in_browser', description: 'Open a page in the browser panel next to the chat so the user can see it.', parameters: S({ url: str('Full URL') }, ['url']) }
+      { name: 'open_in_browser', description: 'Open a page in the browser panel next to the chat so the user can see it.', parameters: S({ url: str('Full URL') }, ['url']) },
+      { name: 'browser_look', description: 'See the page open in the browser panel: its URL, title, readable text and a numbered list of things you can click or type into. Call it before clicking or typing, and again after the page changes.', parameters: S({}) },
+      { name: 'browser_click', description: 'Click something in the browser panel, by its number from browser_look. The user watches your cursor move.', parameters: S({ target: { type: 'number', description: 'Element number from browser_look' } }, ['target']) },
+      { name: 'browser_type', description: 'Type into a field in the browser panel, by its number from browser_look. Never type passwords, card numbers or other secrets.', parameters: S({ target: { type: 'number', description: 'Element number from browser_look' }, text: str('Text to type'), submit: { type: 'boolean', description: 'Press Enter afterwards' } }, ['target', 'text']) },
+      { name: 'browser_scroll', description: 'Scroll the page in the browser panel.', parameters: S({ direction: { type: 'string', enum: ['down', 'up'] } }, ['direction']) }
     );
   return t.concat(connectors.defs(connected));
 }
@@ -166,6 +170,20 @@ async function run(name, a, ctx) {
         say(`Fetch(${String(a.url).replace(/^https?:\/\//, '').slice(0, 60)})`);
         const t = await ctx.readPage(a.url);
         return t || 'Could not read that page.';
+      }
+      case 'browser_look':
+      case 'browser_click':
+      case 'browser_type':
+      case 'browser_scroll': {
+        const act = name.slice(8);
+        if ((act === 'click' || act === 'type') && plan) return 'Plan first mode is on, so you can look at pages but not click or type. Put the steps in your plan.';
+        if ((act === 'click' || act === 'type') && permission === 'ask' && !ctx.browserOk) {
+          if (!(await ctx.approve({ kind: 'browser', title: 'Use the browser panel', detail: 'Let this node click and type in the browser panel for the rest of this reply. You can watch its cursor.' }))) return 'The user said no to browser control.';
+          ctx.browserOk = true;
+        }
+        say(`Browser(${act}${a.target != null ? ' #' + a.target : ''}${a.direction ? ' ' + a.direction : ''})`);
+        const r = await ctx.browser(act, a);
+        return r == null ? 'The browser panel did not respond (the chat may have been stopped).' : typeof r === 'string' ? r : JSON.stringify(r);
       }
       case 'open_in_browser': {
         say(`Browse(${String(a.url).replace(/^https?:\/\//, '').slice(0, 60)})`);

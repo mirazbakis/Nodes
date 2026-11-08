@@ -152,7 +152,13 @@ const PROJECT_PRESETS = [
   { name: 'Full stack app', ids: ['architect', 'backend', 'frontend', 'devops', 'tester'] },
 ];
 function newProject() {
-  const st = { title: '', goal: '', folder: S.settings.defaultFolder || '', allowEdits: true, rounds: 3, members: ['architect', 'engineer', 'tester', 'reviewer'].filter((id) => S.nodes.some((n) => n.id === id)).map((id) => ({ nodeId: id, engine: null })) };
+  const pickRole = (role) => {
+    const co = typeof coSel !== 'undefined' && (S.companies || []).find((c) => c.id === coSel);
+    return (co && S.nodes.find((n) => n.companyId === co.id && n.role === role)) || S.nodes.find((n) => n.role === role);
+  };
+  let def = [...new Set(['architect', 'engineer', 'tester', 'reviewer'].map(pickRole).filter(Boolean))];
+  if (!def.length) def = S.nodes.slice(0, 4);
+  const st = { title: '', goal: '', folder: S.settings.defaultFolder || '', allowEdits: true, rounds: 3, members: def.map((n) => ({ nodeId: n.id, engine: null })) };
   const targets = [];
   for (const g of engineTargets({ includeUnusable: false })) for (const { p, models } of g.items) if (p.usable) for (const m of models.slice(0, p.kind === 'cli' ? 1 : 4)) targets.push({ provider: p.id, model: m });
   const draw = () => {
@@ -183,11 +189,19 @@ function newProject() {
       fn();
       draw();
     };
-    $$('[data-preset]', m).forEach((b) => b.addEventListener('click', redraw(() => {
+    $$('[data-preset]', m).forEach((b) => b.addEventListener('click', async () => {
+      sync();
       const p = PROJECT_PRESETS[+b.dataset.preset];
-      st.members = p.ids.map((id) => S.nodes.find((n) => n.id === id) || [...S.defaultNodes, ...(S.businessNodes || [])].find((n) => n.id === id)).filter((n) => n && S.nodes.some((x) => x.id === n.id)).map((n) => ({ nodeId: n.id, engine: null }));
+      const members = [];
+      for (const role of p.ids) {
+        let n = pickRole(role);
+        if (!n) n = await addNode(role, freeName(role, S.nodes.map((x) => x.name)), { quiet: true });
+        if (!members.some((x) => x.nodeId === n.id)) members.push({ nodeId: n.id, engine: null });
+      }
+      st.members = members;
       if (!st.title) st.title = p.name;
-    })));
+      draw();
+    }));
     $$('[data-eng]', m).forEach((s) => s.addEventListener('change', () => {
       const v = s.value;
       st.members[+s.dataset.eng].engine = v ? { provider: v.split('|')[0], model: v.split('|').slice(1).join('|') } : null;

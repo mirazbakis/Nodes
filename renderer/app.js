@@ -124,7 +124,7 @@ async function boot() {
   applyAccent();
   memoryText = (await api.getMemory()).text;
   $('.splash-logo').outerHTML = logoSVG(132, true);
-  const map = { home: 'home', chat: 'chat', projects: 'briefcase', library: 'book', automations: 'zap', apps: 'apps', nodes: 'grid', engines: 'plug', activity: 'activity', settings: 'settings', phone: 'phone' };
+  const map = { home: 'home', company: 'building', chat: 'chat', projects: 'briefcase', library: 'book', automations: 'zap', apps: 'apps', nodes: 'grid', engines: 'plug', activity: 'activity', settings: 'settings', phone: 'phone' };
   $$('.rail-btn').forEach((b) => (b.innerHTML = icon(map[b.dataset.view || b.dataset.action], 19)));
   $('.brand-mark').innerHTML = logoSVG(20);
   $('#btn-new').innerHTML = icon('plus', 17);

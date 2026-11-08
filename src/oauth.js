@@ -8,5 +8,4 @@ try {
 module.exports = {
   google: { clientId: local.googleClientId || '', clientSecret: local.googleClientSecret || '' },
   github: { clientId: local.githubClientId || '' },
-  notion: { clientId: local.notionClientId || '', clientSecret: local.notionClientSecret || '' },
 };

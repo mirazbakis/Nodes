@@ -1,4 +1,4 @@
-// Connections to the user's own accounts: GitHub, Google (Gmail, Drive, Calendar) and Notion.
+// Connections to the user's own accounts: GitHub and Google (Gmail, Drive, Calendar).
 // Tokens are stored encrypted by main.js; this module only uses them.
 const http = require('http');
 const crypto = require('crypto');
@@ -7,7 +7,6 @@ const { execFile } = require('child_process');
 const CONNECTORS = [
   { id: 'github', name: 'GitHub', blurb: 'Repos, issues, files and pull requests.', soon: !require('./oauth').github.clientId },
   { id: 'google', name: 'Google Workspace', blurb: 'Gmail, Google Drive and Google Calendar.', soon: !require('./oauth').google.clientId },
-  { id: 'notion', name: 'Notion', blurb: 'Search and read your pages.', soon: true },
 ];
 
 const GOOGLE_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.compose', 'https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/calendar.events'];
@@ -117,15 +116,6 @@ function bodyText(part) {
 }
 const mime = (to, subject, body) => b64(`To: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${body}`);
 
-// ---------------- Notion ----------------
-async function notion(token, path, body) {
-  const r = await fetch('https://api.notion.com/v1' + path, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
-  const t = await r.text();
-  if (!r.ok) throw new Error(`Notion ${r.status}: ${t.slice(0, 300)}`);
-  return JSON.parse(t);
-}
-const notionTitle = (p) => Object.values(p.properties || {}).find((v) => v.type === 'title')?.title?.map((t) => t.plain_text).join('') || p.title?.map?.((t) => t.plain_text).join('') || 'Untitled';
-
 // ---------------- tool definitions ----------------
 const S = (props, req = []) => ({ type: 'object', properties: props, required: req });
 const str = (d) => ({ type: 'string', description: d });
@@ -153,11 +143,6 @@ function defs(connected) {
       { name: 'drive_read', description: 'Read a Google Doc, Sheet (as CSV) or text file from Drive.', parameters: S({ id: str('File id from drive_search') }, ['id']) },
       { name: 'calendar_upcoming', description: "List the user's upcoming calendar events.", parameters: S({ days: num('How many days ahead, default 7') }) },
       { name: 'calendar_create_event', description: 'Create a calendar event. Needs approval.', parameters: S({ title: str('Title'), start: str('Start, ISO 8601 with timezone'), end: str('End, ISO 8601 with timezone'), attendees: str('Comma-separated emails, optional'), description: str('Optional notes') }, ['title', 'start', 'end']) }
-    );
-  if (connected.notion)
-    out.push(
-      { name: 'notion_search', description: "Search the user's Notion pages.", parameters: S({ query: str('Search text') }, ['query']) },
-      { name: 'notion_read_page', description: 'Read a Notion page as text.', parameters: S({ id: str('Page id from notion_search') }, ['id']) }
     );
   return out;
 }
@@ -252,20 +237,8 @@ async function run(name, a, ctx) {
       });
       return `Created "${r.summary}": ${r.htmlLink}`;
     }
-    case 'notion_search': {
-      const r = await notion(tokens.notion, '/search', { query: a.query, page_size: 15 });
-      return (r.results || []).map((p) => `id ${p.id} · ${notionTitle(p)} · ${p.object} · edited ${p.last_edited_time}`).join('\n') || 'Nothing found. Make sure the page is shared with your Nodes integration.';
-    }
-    case 'notion_read_page': {
-      const r = await notion(tokens.notion, `/blocks/${a.id}/children?page_size=100`);
-      const text = (r.results || []).map((b) => {
-        const v = b[b.type];
-        return (v?.rich_text || []).map((t) => t.plain_text).join('') || '';
-      }).filter(Boolean).join('\n');
-      return clip(text || '(empty page)', 20000);
-    }
   }
   return `Unknown tool ${name}`;
 }
 
-module.exports = { CONNECTORS, defs, run, googleSignIn, has: (n) => n.startsWith('github_') || n.startsWith('gmail_') || n.startsWith('drive_') || n.startsWith('calendar_') || n.startsWith('notion_') };
+module.exports = { CONNECTORS, defs, run, googleSignIn, has: (n) => n.startsWith('github_') || n.startsWith('gmail_') || n.startsWith('drive_') || n.startsWith('calendar_') };
