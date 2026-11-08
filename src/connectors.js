@@ -5,9 +5,9 @@ const crypto = require('crypto');
 const { execFile } = require('child_process');
 
 const CONNECTORS = [
-  { id: 'github', name: 'GitHub', blurb: 'Repos, issues, files and pull requests.', how: 'token', tokenUrl: 'https://github.com/settings/tokens/new?scopes=repo,read:user&description=Nodes', tokenLabel: 'Personal access token (repo scope)' },
-  { id: 'google', name: 'Google Workspace', blurb: 'Gmail, Google Drive and Google Calendar.', how: 'oauth', setupUrl: 'https://console.cloud.google.com/apis/credentials', apis: ['gmail.googleapis.com', 'drive.googleapis.com', 'calendar-json.googleapis.com'] },
-  { id: 'notion', name: 'Notion', blurb: 'Search and read your pages.', how: 'token', tokenUrl: 'https://www.notion.so/profile/integrations', tokenLabel: 'Internal integration secret' },
+  { id: 'github', name: 'GitHub', blurb: 'Repos, issues, files and pull requests.', soon: !require('./oauth').github.clientId },
+  { id: 'google', name: 'Google Workspace', blurb: 'Gmail, Google Drive and Google Calendar.', soon: !require('./oauth').google.clientId },
+  { id: 'notion', name: 'Notion', blurb: 'Search and read your pages.', soon: true },
 ];
 
 const GOOGLE_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.compose', 'https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/calendar.events'];
@@ -29,7 +29,7 @@ async function gh(token, method, url, body) {
 }
 
 // ---------------- Google ----------------
-// OAuth with the user's own Google Cloud desktop client, using a loopback redirect and PKCE.
+// OAuth with a loopback redirect and PKCE.
 function googleSignIn({ clientId, clientSecret, openExternal }) {
   return new Promise((resolve, reject) => {
     const verifier = crypto.randomBytes(32).toString('base64url');

@@ -224,3 +224,7 @@
 
 .bubble.ai { white-space: normal; }
 .bubble.ai.q { white-space: pre-wrap; }
+
+/* GitHub device sign-in */
+.gh-code{font:600 34px/1 var(--mono, ui-monospace, Menlo, monospace);letter-spacing:.14em;text-align:center;padding:22px 0;margin:4px 0 12px;border-radius:14px;background:var(--panel-2, rgba(255,255,255,.05));user-select:all}
+.gh-wait{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--muted, #8a877d);font-size:13px}

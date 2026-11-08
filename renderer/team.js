@@ -150,10 +150,10 @@ async function renderApps(main) {
   const row = (c) => {
     const on = conn[c.id];
     const who = c.id === 'github' ? info.github?.login && '@' + info.github.login : c.id === 'google' ? info.google?.email : info.notion?.name;
-    return `<div class="li"><div class="li-row"><div class="li-logo" style="background:#1f1e1b">${logo[c.id]}</div><div class="li-main"><div class="li-name">${esc(c.name)} ${on ? '<span class="chip green">Connected</span>' : ''}</div><div class="li-sub">${esc(on && who ? `${who} · ` : '')}${esc(c.blurb)}</div></div>${on ? `<button class="btn small ghost danger" data-disc="${c.id}">Disconnect</button>` : `<button class="btn small primary" data-conn="${c.id}">Connect</button>`}</div></div>`;
+    return `<div class="li"><div class="li-row"><div class="li-logo" style="background:#1f1e1b">${logo[c.id]}</div><div class="li-main"><div class="li-name">${esc(c.name)} ${on ? '<span class="chip green">Connected</span>' : ''}</div><div class="li-sub">${esc(on && who ? `${who} · ` : '')}${esc(c.blurb)}</div></div>${c.soon ? '<span class="chip">Coming soon</span>' : on ? `<button class="btn small ghost danger" data-disc="${c.id}">Disconnect</button>` : `<button class="btn small primary" data-conn="${c.id}">Sign in</button>`}</div></div>`;
   };
   main.innerHTML = `${topbar('<h1>Apps</h1>')}<div class="page"><div class="page-inner">
-    <div class="page-head"><div><h2>Apps</h2><p>Let your nodes work with your accounts. Tokens are encrypted on this computer and only ever sent to that service. Anything that sends, posts or changes something asks you first (unless the chat is on Full trust).</p></div></div>
+    <div class="page-head"><div><h2>Apps</h2><p>Sign in once and your nodes can work with your accounts. Anything that sends, posts or changes something asks you first.</p></div></div>
     <div class="list">${st.connectors.map(row).join('')}</div>
     <div class="section-title"><span>Localhost previews</span></div>
     <div class="list"><div class="li"><div class="li-row"><div class="li-logo" style="background:#1d63ed;color:#fff">${icon('cpu', 18)}</div><div class="li-main"><div class="li-name">Docker ${st.docker.installed ? (st.docker.running ? '<span class="chip green">Running</span>' : '<span class="chip amber">Installed, not running</span>') : '<span class="chip">Not installed</span>'}</div><div class="li-sub">${st.docker.running && st.docker.version ? `Version ${esc(st.docker.version)}. ` : ''}Nodes runs projects with a Dockerfile or compose file in Docker, and serves plain sites with its own built-in server.</div></div>${st.docker.installed ? '' : '<button class="btn small" data-href="https://www.docker.com/products/docker-desktop/">Get Docker</button>'}</div></div>
@@ -165,51 +165,29 @@ async function renderApps(main) {
   }));
   $$('[data-conn]', main).forEach((b) => b.addEventListener('click', () => connectApp(b.dataset.conn, st.connectors.find((c) => c.id === b.dataset.conn), () => renderApps(main))));
 }
-function connectApp(id, c, done) {
-  if (id === 'google') {
-    const m = modal('Connect Google', 'Gmail, Drive and Calendar, using your own Google Cloud app so your data only goes between you and Google.', `
-      <ol class="steps-list"><li>Open <a data-href="https://console.cloud.google.com/projectcreate">Google Cloud</a> and create a project.</li><li>Enable the <a data-href="https://console.cloud.google.com/apis/library/gmail.googleapis.com">Gmail</a>, <a data-href="https://console.cloud.google.com/apis/library/drive.googleapis.com">Drive</a> and <a data-href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com">Calendar</a> APIs.</li><li>Under <a data-href="https://console.cloud.google.com/apis/credentials">Credentials</a>, create an OAuth client ID of type <b>Desktop app</b>, and add yourself as a test user on the consent screen.</li><li>Paste the client ID and secret here, then sign in.</li></ol>
-      <div class="field"><label>Client ID</label><input class="input" id="g-id" placeholder="xxxx.apps.googleusercontent.com" spellcheck="false"></div>
-      <div class="field"><label>Client secret</label><input class="input" id="g-sec" type="password" spellcheck="false"></div>
-      <div class="result" id="g-res"></div>`, `<span></span><div class="right"><button class="btn" data-c>Cancel</button><button class="btn primary" id="g-go">Sign in with Google</button></div>`);
-    $('[data-c]', m).addEventListener('click', closeLayer);
-    $('#g-go', m).addEventListener('click', async (e) => {
-      const idv = $('#g-id', m).value.trim();
-      if (!idv) return $('#g-id', m).focus();
-      e.currentTarget.disabled = true;
-      $('#g-res', m).textContent = 'Finish signing in in your browser…';
-      const r = await api.appsGoogle(idv, $('#g-sec', m).value.trim());
-      if (r.ok) {
-        closeLayer();
-        toast(`Google connected${r.info?.email ? ' as ' + r.info.email : ''}`);
-        done && done();
-      } else {
-        e.currentTarget.disabled = false;
-        $('#g-res', m).className = 'result bad';
-        $('#g-res', m).textContent = r.error;
-      }
-    });
-    return;
-  }
-  const m = modal(`Connect ${esc(c.name)}`, '', `
-    <p class="sub" style="margin:0;color:var(--ink-2);font-size:13.5px">${id === 'github' ? 'Create a token with the <b>repo</b> scope (the link fills it in for you), then paste it here.' : 'Create an internal integration, copy its secret, and share the pages you want Nodes to see with it.'}</p>
-    <button class="btn" data-href="${esc(c.tokenUrl)}">${icon('external', 13)}Create a token</button>
-    <div class="field"><label>${esc(c.tokenLabel)}</label><input class="input" id="tk" type="password" spellcheck="false" autocomplete="off"></div>
-    <div class="result" id="tk-res"></div>`, `<span></span><div class="right"><button class="btn" data-c>Cancel</button><button class="btn primary" id="tk-go">Connect</button></div>`);
-  $('[data-c]', m).addEventListener('click', closeLayer);
-  $('#tk-go', m).addEventListener('click', async () => {
-    const v = $('#tk', m).value.trim();
-    if (!v) return $('#tk', m).focus();
-    const r = await api.appsToken(id, v);
-    if (r.ok) {
-      closeLayer();
-      toast(`${c.name} connected`);
-      done && done();
-    } else {
-      $('#tk-res', m).className = 'result bad';
-      $('#tk-res', m).textContent = r.error;
-    }
-  });
+async function connectApp(id, c, done) {
+  if (id === 'github') return connectGithub(done);
+  if (id !== 'google') return toast('Coming soon');
+  toast('Finish signing in with Google in your browser');
+  const r = await api.appsGoogle();
+  if (r.ok) toast('Connected ' + (r.info?.email || 'Google'));
+  else toast(r.error || 'Sign-in failed');
+  done && done();
+}
+async function connectGithub(done) {
+  const r = await api.appsGithubStart();
+  if (!r.ok) return toast(r.error || 'Could not reach GitHub');
+  navigator.clipboard.writeText(r.userCode).catch(() => {});
+  const m = modal('Sign in with GitHub', 'GitHub opened in your browser. Paste this code there to connect.', `<div class="gh-code">${esc(r.userCode)}</div><div class="gh-wait">Waiting for GitHub…</div>`, `<button class="btn ghost" data-copy>Copy code</button><div class="right"><button class="btn" data-open>Open GitHub again</button></div>`);
+  let open = true;
+  $('[data-copy]', m).addEventListener('click', () => (navigator.clipboard.writeText(r.userCode), toast('Code copied')));
+  $('[data-open]', m).addEventListener('click', () => api.openExternal ? api.openExternal(r.url) : window.open(r.url));
+  $('[data-close]', m).addEventListener('click', () => ((open = false), api.appsGithubCancel()));
+  const res = await api.appsGithubWait();
+  if (!open) return;
+  closeLayer();
+  toast(res.ok ? 'Connected @' + (res.info?.login || 'GitHub') : res.error || 'Sign-in failed');
+  done && done();
 }
 window.renderMain = (function (base) {
   return function () {
@@ -229,7 +207,7 @@ window.startOnboarding = function () {
     if (ob && ob.step === 3) drawOnboarding();
   });
 };
-const OB_STEPS = ['Welcome', 'You', 'Team', 'Engines', 'Apps', 'Ready'];
+const OB_STEPS = ['Welcome', 'You', 'Team', 'Engines', 'Ready'];
 window.drawOnboarding = function () {
   const el = $('#onboarding');
   let body = '';
@@ -270,10 +248,6 @@ window.drawOnboarding = function () {
       <div class="section-title"><span>Free API keys <em style="font-weight:400;color:var(--faint)">optional</em></span><button class="btn small ghost" data-ob="rescan">${icon('refresh', 13)}Rescan</button></div>
       <div class="obx-keys">${['gemini', 'groq', 'openrouter', 'cerebras'].map(providerById).filter(Boolean).map((p) => `<div class="cli-card"><div class="top"><div class="li-logo">${esc(p.name.replace(/[^A-Za-z]/g, '').slice(0, 2))}</div><div style="flex:1"><b>${esc(p.name)}</b><span>${p.hasKey ? 'Key saved' : 'Free tier'}</span></div>${p.hasKey ? '<span class="chip green">Ready</span>' : `<button class="btn small ghost" data-href="${esc(p.keyUrl)}">Get key</button>`}</div>${p.hasKey ? '' : `<div class="inline"><input class="input" type="password" data-obkey="${p.id}" placeholder="Paste key"><button class="btn small" data-obsave="${p.id}">Save</button></div>`}</div>`).join('')}</div>
       <p class="obx-fine">No AIs at all? Nodes still works with a free model that needs no sign-up.</p>`;
-  } else if (s === 4) {
-    body = `<div class="obx-head"><h2>Connect your apps</h2><p>Optional. Let nodes read your email and calendar, find files in Drive, and work on your GitHub repos. Anything that sends or changes something asks you first.</p></div>
-      <div id="ob-apps" class="list"><div class="conv-empty">Loading…</div></div>`;
-    next = 'Continue';
   } else {
     const picks = ob.picks;
     body = `<div class="obx-hero"><div class="obx-burst">${picks.slice(0, 10).map((p, i) => `<span style="--d:${i * 0.07}s">${roleAv(roleOf(p.role), 60)}</span>`).join('')}</div>
@@ -284,7 +258,7 @@ window.drawOnboarding = function () {
   el.innerHTML = `<div class="obx">
     <div class="obx-top"><div class="obx-progress">${OB_STEPS.map((t, i) => `<span class="${i === s ? 'on' : i < s ? 'done' : ''}">${t}</span>`).join('')}</div></div>
     <div class="obx-body"><div class="obx-card s${s}">${body}</div></div>
-    <div class="obx-foot"><div>${s > 0 ? '<button class="btn ghost" data-ob="back">Back</button>' : ''}</div><div style="display:flex;gap:8px">${s === 3 || s === 4 ? '<button class="btn ghost" data-ob="next">Skip</button>' : ''}<button class="btn primary big" data-ob="${s === 5 ? 'finish' : 'next'}" ${canNext ? '' : 'disabled'}>${esc(next)}</button></div></div>
+    <div class="obx-foot"><div>${s > 0 ? '<button class="btn ghost" data-ob="back">Back</button>' : ''}</div><div style="display:flex;gap:8px">${s === 3 ? '<button class="btn ghost" data-ob="next">Skip</button>' : ''}<button class="btn primary big" data-ob="${s === 4 ? 'finish' : 'next'}" ${canNext ? '' : 'disabled'}>${esc(next)}</button></div></div>
   </div>`;
   const sync = () => {
     if ($('#ob-name')) {
@@ -335,14 +309,6 @@ window.drawOnboarding = function () {
     toast('Key saved');
   }));
   bindCli(el, () => drawOnboarding());
-  if (s === 4) {
-    api.appsState().then((st) => {
-      const box = $('#ob-apps');
-      if (!box) return;
-      box.innerHTML = st.connectors.map((c) => `<div class="li"><div class="li-row"><div class="li-main"><div class="li-name">${esc(c.name)} ${st.connected[c.id] ? '<span class="chip green">Connected</span>' : ''}</div><div class="li-sub">${esc(c.blurb)}</div></div>${st.connected[c.id] ? '' : `<button class="btn small" data-conn="${c.id}">Connect</button>`}</div></div>`).join('');
-      $$('[data-conn]', box).forEach((b) => b.addEventListener('click', () => connectApp(b.dataset.conn, st.connectors.find((c) => c.id === b.dataset.conn), () => drawOnboarding())));
-    });
-  }
   $('#ob-name', el)?.focus();
 };
 

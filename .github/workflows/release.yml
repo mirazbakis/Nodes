@@ -34,6 +34,17 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Add sign-in keys
+        shell: bash
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GH_OAUTH_CLIENT_ID: ${{ secrets.GH_OAUTH_CLIENT_ID }}
+          NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
+          NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
+        run: |
+          node -e "const e=process.env; require('fs').writeFileSync('src/oauth.local.json', JSON.stringify({googleClientId:e.GOOGLE_CLIENT_ID||'',googleClientSecret:e.GOOGLE_CLIENT_SECRET||'',githubClientId:e.GH_OAUTH_CLIENT_ID||'',notionClientId:e.NOTION_CLIENT_ID||'',notionClientSecret:e.NOTION_CLIENT_SECRET||''}))"
+
       - name: Build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -58,6 +69,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Add sign-in keys
+        shell: bash
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GH_OAUTH_CLIENT_ID: ${{ secrets.GH_OAUTH_CLIENT_ID }}
+          NOTION_CLIENT_ID: ${{ secrets.NOTION_CLIENT_ID }}
+          NOTION_CLIENT_SECRET: ${{ secrets.NOTION_CLIENT_SECRET }}
+        run: |
+          node -e "const e=process.env; require('fs').writeFileSync('src/oauth.local.json', JSON.stringify({googleClientId:e.GOOGLE_CLIENT_ID||'',googleClientSecret:e.GOOGLE_CLIENT_SECRET||'',githubClientId:e.GH_OAUTH_CLIENT_ID||'',notionClientId:e.NOTION_CLIENT_ID||'',notionClientSecret:e.NOTION_CLIENT_SECRET||''}))"
 
       - name: Build
         shell: bash

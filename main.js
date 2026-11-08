@@ -584,7 +584,7 @@ ipcMain.handle('chat:start', async (e, req) => {
 - Your workspace folder is ${cwd}. Files you create go there. ${permText}
 - When you build a website or web app, put it in the workspace and call preview_site so ${callMe} can see it running on localhost.
 - ${web ? 'When you need current or factual information, call web_search with your own precise query (not the user\'s raw message), read the best pages, and cite them as [1], [2].' : 'Web access is off in this chat. If you need it, say so.'}
-- Connected apps you can use: ${apps.length ? apps.join(', ') : 'none yet (the user can connect GitHub, Google and Notion in Settings › Apps)'}.
+- Connected apps you can use: ${apps.length ? apps.join(', ') : 'none'}.
 - After using tools, end with a short message saying what you did and what's next.
 - You can add an iMessage-style reaction to the user's message with the react tool when it feels natural, like a friend would. Don't overdo it.`;
   if (thinking === 'high') system += '\n- Think carefully, consider alternatives and check your work before answering.';
@@ -665,7 +665,7 @@ ipcMain.handle('apps:state', async () => {
   const d = await preview.dockerStatus(cli.which);
   return { connectors: connectors.CONNECTORS, connected: connectedApps(), info: data.connections || {}, docker: { installed: d.installed, running: d.running, version: d.version || '' }, previews: preview.list() };
 });
-ipcMain.handle('apps:token', async (_e, id, token) => {
+async function connectToken(id, token) {
   data.connections = data.connections || {};
   if (!token) {
     delete keys['conn:' + id];
@@ -694,8 +694,50 @@ ipcMain.handle('apps:token', async (_e, id, token) => {
   } catch (err) {
     return { ok: false, error: err.message };
   }
+}
+ipcMain.handle('apps:token', (_e, id, token) => connectToken(id, token));
+let ghDevice = null;
+ipcMain.handle('apps:github-start', async () => {
+  const { clientId } = require('./src/oauth').github;
+  if (!clientId) return { ok: false, error: 'Coming soon' };
+  try {
+    const r = await fetch('https://github.com/login/device/code', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: clientId, scope: 'repo read:user' }) });
+    const j = await r.json();
+    if (!r.ok || !j.device_code) throw new Error(j.error_description || 'GitHub error ' + r.status);
+    ghDevice = { clientId, code: j.device_code, interval: (j.interval || 5) * 1000, until: Date.now() + (j.expires_in || 900) * 1000 };
+    shell.openExternal(j.verification_uri);
+    return { ok: true, userCode: j.user_code, url: j.verification_uri };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
-ipcMain.handle('apps:google', async (_e, clientId, clientSecret) => {
+ipcMain.handle('apps:github-wait', async () => {
+  const dev = ghDevice;
+  if (!dev) return { ok: false, error: 'Cancelled' };
+  while (ghDevice === dev && Date.now() < dev.until) {
+    await new Promise((res) => setTimeout(res, dev.interval));
+    if (ghDevice !== dev) break;
+    try {
+      const r = await fetch('https://github.com/login/oauth/access_token', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: dev.clientId, device_code: dev.code, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }) });
+      const j = await r.json();
+      if (j.access_token) {
+        ghDevice = null;
+        return connectToken('github', j.access_token);
+      }
+      if (j.error === 'slow_down') dev.interval += 5000;
+      else if (j.error === 'access_denied') return (ghDevice = null), { ok: false, error: 'You cancelled on GitHub' };
+      else if (j.error && j.error !== 'authorization_pending') return (ghDevice = null), { ok: false, error: j.error_description || j.error };
+    } catch {}
+  }
+  if (ghDevice === dev) ghDevice = null;
+  return { ok: false, error: Date.now() >= dev.until ? 'The code expired, try again' : 'Cancelled' };
+});
+ipcMain.handle('apps:github-cancel', () => {
+  ghDevice = null;
+});
+ipcMain.handle('apps:google', async () => {
+  const { clientId, clientSecret } = require('./src/oauth').google;
+  if (!clientId) return { ok: false, error: 'Coming soon' };
   try {
     const r = await connectors.googleSignIn({ clientId: String(clientId).trim(), clientSecret: String(clientSecret || '').trim(), openExternal: (u) => shell.openExternal(u) });
     keys['conn:google'] = JSON.stringify({ ...r, clientId: String(clientId).trim(), clientSecret: String(clientSecret || '').trim() });
