@@ -150,7 +150,7 @@ function readLimits(id, h, emit) {
 }
 
 // ---------- one attempt ----------
-async function attemptCli({ provider, model, system, messages, signal, timeouts, emit, cwd, allowEdits }) {
+async function attemptCli({ provider, model, system, messages, signal, timeouts, emit, cwd, permission, thinking }) {
   let text = '';
   const ctrl = new AbortController();
   const onOuter = () => ctrl.abort();
@@ -173,7 +173,7 @@ async function attemptCli({ provider, model, system, messages, signal, timeouts,
   );
   try {
     await cli.runCli({
-      id: provider.id, model, system, messages, cwd, allowEdits, signal: ctrl.signal,
+      id: provider.id, model, system, messages, cwd, permission, thinking, signal: ctrl.signal,
       onText: (t) => {
         arm(limit, `went quiet for ${limit}s`);
         splitter.push(t);
@@ -197,12 +197,42 @@ async function attemptCli({ provider, model, system, messages, signal, timeouts,
   return { text: text.trim() };
 }
 
-async function attempt(opts) {
-  if (opts.provider.kind === 'cli') return attemptCli(opts);
-  const { provider, cfg, key, model, system, messages, temperature, signal, timeouts, emit } = opts;
+// ---------- agent loop for API engines ----------
+// Canonical transcript entries: {role:'user'|'assistant'|'tool', content, tool_calls?, tool_call_id?, name?}
+const EFFORT_RE = /gpt-oss|gpt-5|^o\d|gemini-2\.5|gemini-3|grok-3-mini|grok-4|qwen3|qwen-3|deepseek-r1|magistral|kimi-k2-thinking/i;
+const BUDGET = { low: 2048, medium: 8192, high: 24000 };
+
+function toOpenAI(work) {
+  return work.map((m) => {
+    if (m.role === 'tool') return { role: 'tool', tool_call_id: m.tool_call_id, content: String(m.content ?? '') };
+    if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length)
+      return { role: 'assistant', content: m.content || '', tool_calls: m.tool_calls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: JSON.stringify(t.args || {}) } })) };
+    return { role: m.role, content: m.content };
+  });
+}
+function toAnthropic(work) {
+  const out = [];
+  const push = (role, blocks) => {
+    const last = out[out.length - 1];
+    if (last && last.role === role) last.content.push(...blocks);
+    else out.push({ role, content: blocks });
+  };
+  for (const m of work) {
+    if (m.role === 'tool') push('user', [{ type: 'tool_result', tool_use_id: m.tool_call_id, content: String(m.content ?? '') }]);
+    else if (m.role === 'assistant') {
+      const blocks = [];
+      if (m.content) blocks.push({ type: 'text', text: m.content });
+      for (const t of m.tool_calls || []) blocks.push({ type: 'tool_use', id: t.id, name: t.name, input: t.args || {} });
+      if (blocks.length) push('assistant', blocks);
+    } else push('user', [{ type: 'text', text: m.content || ' ' }]);
+  }
+  while (out.length && out[0].role !== 'user') out.shift();
+  return out;
+}
+
+async function oneRound({ provider, cfg, key, model, system, work, temperature, signal, timeouts, emit, tools, thinking }) {
   const url = endpointFor(provider, cfg);
   if (!url || url.startsWith('/')) throw new AttemptError('no endpoint configured', { cooldown: 0 });
-
   const ctrl = new AbortController();
   const onOuterAbort = () => ctrl.abort();
   signal.addEventListener('abort', onOuterAbort);
@@ -215,10 +245,11 @@ async function attempt(opts) {
       ctrl.abort();
     }, secs * 1000);
   };
-  arm(timeouts.first, `no response within ${timeouts.first}s`);
+  arm(thinking && thinking !== 'off' ? Math.max(timeouts.first, 90) : timeouts.first, `no response within ${timeouts.first}s`);
 
   let text = '';
   let reasoningChars = 0;
+  const calls = []; // {id, name, argsText}
   const splitter = makeThinkSplitter(
     (t) => {
       if (!t) return;
@@ -241,18 +272,20 @@ async function attempt(opts) {
 
   let body;
   const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...authHeaders(provider, key), ...(provider.headers || {}) };
+  const thinkOn = thinking && thinking !== 'off';
   if (provider.kind === 'anthropic') {
-    // Anthropic needs alternating user/assistant turns starting with user.
-    const merged = [];
-    for (const m of messages) {
-      if (merged.length && merged[merged.length - 1].role === m.role) merged[merged.length - 1].content += '\n\n' + m.content;
-      else merged.push({ role: m.role, content: m.content });
+    body = { model, system, messages: toAnthropic(work), max_tokens: 16000, stream: true, temperature: Math.min(1, temperature) };
+    if (tools && tools.length) body.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
+    else if (thinkOn) {
+      body.thinking = { type: 'enabled', budget_tokens: BUDGET[thinking] || 8192 };
+      body.temperature = 1;
+      body.max_tokens = (BUDGET[thinking] || 8192) + 8000;
     }
-    while (merged.length && merged[0].role !== 'user') merged.shift();
-    body = { model, system, messages: merged, max_tokens: 8192, stream: true, temperature: Math.min(1, temperature) };
   } else {
-    body = { model, stream: true, messages: [{ role: 'system', content: system }, ...messages] };
+    body = { model, stream: true, messages: [{ role: 'system', content: system }, ...toOpenAI(work)] };
     if (!/^(o\d|gpt-5)/.test(model) && provider.id !== 'pollinations') body.temperature = temperature;
+    if (tools && tools.length) body.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+    if (thinkOn && EFFORT_RE.test(model)) body.reasoning_effort = thinking;
   }
 
   try {
@@ -262,26 +295,28 @@ async function attempt(opts) {
     } catch (e) {
       if (signal.aborted) throw new AttemptError('stopped', { fatal: true });
       if (ctrl.timeoutReason) throw new AttemptError(ctrl.timeoutReason, { cooldown: 45 });
-      throw new AttemptError(provider.local ? 'not running on this Mac' : 'could not connect', { cooldown: provider.local ? 120 : 20 });
+      throw new AttemptError(provider.local ? 'not running on this computer' : 'could not connect', { cooldown: provider.local ? 120 : 20 });
     }
     readLimits(provider.id, res.headers, emit);
     if (!res.ok) {
       const t = await res.text().catch(() => '');
       const err = classify(res.status, t);
+      err.body = t;
       if (err.status === 429 || err.status === 402) emit({ type: 'usage', provider: provider.id, providerName: provider.name, exhausted: true, reason: err.message });
       throw err;
     }
-
     const ctype = res.headers.get('content-type') || '';
     if (!ctype.includes('event-stream')) {
-      // Some servers ignore stream:true and return one JSON body.
       const j = await res.json().catch(() => null);
-      const c = j && (j.choices?.[0]?.message?.content ?? (j.content || []).map((b) => b.text || '').join(''));
-      if (!c) throw new AttemptError('returned an empty reply', { cooldown: 20 });
+      const msg = j && j.choices?.[0]?.message;
+      const c = msg ? msg.content || '' : (j?.content || []).map((b) => b.text || '').join('');
+      for (const tc of msg?.tool_calls || []) calls.push({ id: tc.id, name: tc.function?.name, argsText: tc.function?.arguments || '{}' });
+      for (const b of j?.content || []) if (b.type === 'tool_use') calls.push({ id: b.id, name: b.name, argsText: JSON.stringify(b.input || {}) });
       tick();
       splitter.push(c);
       splitter.flush();
     } else {
+      const anth = {}; // index -> call
       for await (const line of sseLines(res.body)) {
         if (!line.startsWith('data:')) continue;
         const data = line.slice(5).trim();
@@ -294,9 +329,14 @@ async function attempt(opts) {
         }
         if (j.error) throw classify(j.error.code === 429 ? 429 : 500, JSON.stringify(j.error));
         if (provider.kind === 'anthropic') {
-          if (j.type === 'content_block_delta') {
+          if (j.type === 'content_block_start' && j.content_block?.type === 'tool_use') {
+            tick();
+            anth[j.index] = { id: j.content_block.id, name: j.content_block.name, argsText: '' };
+            calls.push(anth[j.index]);
+          } else if (j.type === 'content_block_delta') {
             tick();
             if (j.delta.type === 'text_delta') splitter.push(j.delta.text);
+            else if (j.delta.type === 'input_json_delta' && anth[j.index]) anth[j.index].argsText += j.delta.partial_json || '';
             else if (j.delta.type === 'thinking_delta') {
               reasoningChars += j.delta.thinking.length;
               emit({ type: 'reasoning', chars: j.delta.thinking.length });
@@ -314,6 +354,14 @@ async function attempt(opts) {
             tick();
             splitter.push(d.content);
           }
+          for (const tc of d.tool_calls || []) {
+            tick();
+            const i = tc.index ?? 0;
+            if (!calls[i]) calls[i] = { id: tc.id || `call_${i}_${Date.now()}`, name: '', argsText: '' };
+            if (tc.id) calls[i].id = tc.id;
+            if (tc.function?.name) calls[i].name += tc.function.name;
+            if (tc.function?.arguments) calls[i].argsText += tc.function.arguments;
+          }
         }
       }
       splitter.flush();
@@ -327,9 +375,60 @@ async function attempt(opts) {
     clearTimeout(timer);
     signal.removeEventListener('abort', onOuterAbort);
   }
+  const toolCalls = calls.filter((c) => c && c.name).map((c) => {
+    let args = {};
+    try {
+      args = c.argsText ? JSON.parse(c.argsText) : {};
+    } catch {
+      args = { _raw: c.argsText };
+    }
+    return { id: c.id, name: c.name, args };
+  });
+  return { text, toolCalls, reasoningChars };
+}
 
-  if (!text.trim()) throw new AttemptError(reasoningChars ? 'thought but never answered' : 'returned an empty reply', { cooldown: 20 });
-  return { text };
+async function attempt(opts) {
+  if (opts.provider.kind === 'cli') return attemptCli(opts);
+  const { emit } = opts;
+  const work = opts.work || [...(opts.messages || [])];
+  let tools = opts.tools && opts.tools.length ? opts.tools : null;
+  let thinking = opts.thinking || 'off';
+  let all = '';
+  for (let round = 0; round < 16; round++) {
+    let r;
+    try {
+      r = await oneRound({ ...opts, work, tools, thinking });
+    } catch (e) {
+      // Some models reject tools or reasoning options: drop them and retry once each.
+      if (e.status === 400 && round === 0 && !e.retried) {
+        if (thinking !== 'off' && /reason|thinking|effort|budget/i.test(e.body || '')) {
+          thinking = 'off';
+          round--;
+          continue;
+        }
+        if (tools && /tool|function/i.test(e.body || '')) {
+          tools = null;
+          emit({ type: 'tool', text: 'Note(this model can\'t use tools, answering in chat only)' });
+          round--;
+          continue;
+        }
+      }
+      throw e;
+    }
+    if (r.text) all += (all && !all.endsWith('\n') ? '\n\n' : '') + r.text;
+    if (r.toolCalls.length && opts.runTool) {
+      work.push({ role: 'assistant', content: r.text || '', tool_calls: r.toolCalls });
+      for (const tc of r.toolCalls) {
+        const out = await opts.runTool(tc.name, tc.args, opts.signal);
+        if (opts.signal.aborted) throw new AttemptError('stopped', { fatal: true });
+        work.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: typeof out === 'string' ? out : JSON.stringify(out) });
+      }
+      continue;
+    }
+    if (!all.trim()) throw new AttemptError(r.reasoningChars ? 'thought but never answered' : 'returned an empty reply', { cooldown: 20 });
+    return { text: all };
+  }
+  return { text: all || 'I stopped after 16 steps. Tell me to keep going if you want me to continue.' };
 }
 
 // ---------- chain ----------
@@ -374,8 +473,9 @@ function buildChain({ agent, pinned, providerCfgs, providerOrder, keys, autoFall
   return [...head, ...rest.filter((c) => !isCooling(c.provider, c.model)), ...rest.filter((c) => isCooling(c.provider, c.model))];
 }
 
-async function run({ chain, providerCfgs, keys, system, messages, temperature, signal, timeouts, emit, maxAttempts = 12, cwd, allowEdits }) {
+async function run({ chain, providerCfgs, keys, system, messages, temperature, signal, timeouts, emit, maxAttempts = 12, cwd, permission, thinking, tools, runTool }) {
   const attempts = [];
+  const work = [...messages]; // shared, so the next engine continues where a failed one stopped
   for (const c of chain.slice(0, maxAttempts)) {
     const provider = byId[c.provider];
     const started = Date.now();
@@ -383,7 +483,7 @@ async function run({ chain, providerCfgs, keys, system, messages, temperature, s
     try {
       const { text } = await attempt({
         provider, cfg: providerCfgs[c.provider] || {}, key: keys[c.provider], model: c.model,
-        system, messages, temperature, signal, timeouts, emit, cwd, allowEdits,
+        system, messages: cliMessages(work), work, temperature, signal, timeouts, emit, cwd, permission, thinking, tools, runTool,
       });
       const ms = Date.now() - started;
       attempts.push({ ...c, ok: true, ms });
@@ -396,6 +496,17 @@ async function run({ chain, providerCfgs, keys, system, messages, temperature, s
     }
   }
   return { ok: false, attempts };
+}
+
+// CLI engines only take plain text, so tool steps done by an earlier engine become notes.
+function cliMessages(work) {
+  const out = [];
+  for (const m of work) {
+    if (m.role === 'tool') out.push({ role: 'user', content: `[Result of ${m.name}]: ${String(m.content).slice(0, 4000)}` });
+    else if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length) out.push({ role: 'assistant', content: (m.content ? m.content + '\n' : '') + m.tool_calls.map((t) => `[Used ${t.name} ${JSON.stringify(t.args).slice(0, 300)}]`).join('\n') });
+    else out.push({ role: m.role, content: m.content });
+  }
+  return out;
 }
 
 // ---------- utilities used by settings ----------

@@ -4,11 +4,14 @@ const fs = require('fs');
 const os = require('os');
 const QRCode = require('qrcode');
 const { PROVIDERS, byId, contextWindow } = require('./src/providers');
-const { NODES, BUSINESS_NODES, TEAM_ID } = require('./src/nodes');
+const { NODES, BUSINESS_NODES, TEAM_ID, ROLES, TEAMS, makeNode } = require('./src/nodes');
 const engine = require('./src/engine');
 const cli = require('./src/cli');
 const { search, readPage, SEARCH_ENGINES } = require('./src/search');
 const { PhoneServer } = require('./src/phone');
+const tools = require('./src/tools');
+const connectors = require('./src/connectors');
+const preview = require('./src/preview');
 
 app.setName('Nodes');
 nativeTheme.themeSource = 'dark';
@@ -60,7 +63,7 @@ function defaults() {
     version: 2,
     providers,
     providerOrder: [...new Set([...order, ...PROVIDERS.map((p) => p.id)])],
-    nodes: NODES.map((n) => ({ ...n, builtIn: true })),
+    nodes: [],
     conversations: [],
     search: { order: SEARCH_ENGINES.map((e) => e.id), enabled: {}, extra: {} },
     settings: {
@@ -87,7 +90,7 @@ function load() {
   data.providers = data.providers || {};
   for (const p of PROVIDERS) data.providers[p.id] = { ...d.providers[p.id], ...(data.providers[p.id] || {}) };
   data.providerOrder = [...new Set([...(data.providerOrder || []).filter((id) => byId[id]), ...d.providerOrder])];
-  data.nodes = data.nodes && data.nodes.length ? data.nodes : d.nodes;
+  data.nodes = Array.isArray(data.nodes) ? data.nodes : [];
   data.conversations = data.conversations || [];
   data.search = { ...d.search, ...(data.search || {}) };
   data.search.order = [...new Set([...(data.search.order || []).filter((id) => SEARCH_ENGINES.some((e) => e.id === id)), ...d.search.order])];
@@ -151,6 +154,8 @@ function publicState() {
     usage: data.usage,
     automations: data.automations,
     businessNodes: BUSINESS_NODES,
+    roles: ROLES.map(({ system, ...r }) => r),
+    teams: TEAMS,
   };
 }
 
@@ -321,6 +326,15 @@ ipcMain.handle('conv:delete', (_e, id) => {
   return true;
 });
 ipcMain.handle('node:save', (_e, node) => {
+  const prev = data.nodes.find((a) => a.id === node.id);
+  if (node.role && prev) {
+    if (node.system !== prev.system) node.customSystem = true;
+    if (!node.customSystem && node.name !== prev.name) {
+      const fresh = makeNode(node.role, node.name, { id: node.id, avatar: node.avatar });
+      node.system = fresh.system;
+      if (node.greeting === prev.greeting) node.greeting = fresh.greeting;
+    }
+  }
   const i = data.nodes.findIndex((a) => a.id === node.id);
   if (i === -1) data.nodes.push(node);
   else data.nodes[i] = node;
@@ -337,10 +351,16 @@ ipcMain.handle('node:delete', (_e, id) => {
   save();
   return data.nodes;
 });
+ipcMain.handle('node:create', (_e, role, name, avatar) => {
+  const n = makeNode(role, name, avatar ? { avatar } : {});
+  data.nodes.push(n);
+  save();
+  return { nodes: data.nodes, node: n };
+});
 ipcMain.handle('node:reset', (_e, id) => {
-  const def = NODES.find((a) => a.id === id);
   const i = data.nodes.findIndex((a) => a.id === id);
-  if (def && i >= 0) data.nodes[i] = { ...def, builtIn: true };
+  const cur = data.nodes[i];
+  if (cur && cur.role) data.nodes[i] = makeNode(cur.role, cur.name, { id: cur.id, avatar: cur.avatar });
   save();
   return data.nodes;
 });
@@ -539,33 +559,68 @@ ipcMain.handle('chat:start', async (e, req) => {
   const messages = req.messages;
 
   const callMe = data.settings.callMe || data.settings.userName || 'the user';
+  const permission = ['ask', 'edit', 'plan', 'full'].includes(req.permission) ? req.permission : 'ask';
+  const thinking = ['off', 'low', 'medium', 'high'].includes(req.thinking) ? req.thinking : 'low';
+  const cwd = req.folder || data.settings.defaultFolder || tools.defaultWorkspace(node.name);
+  try {
+    fs.mkdirSync(cwd, { recursive: true });
+  } catch {}
+  const connected = connectedApps();
   let system = (node.system || '').replace(/\{CALLME\}/g, callMe);
-  system += `\n\nThe user's name is ${data.settings.userName || 'not set'}; address them as "${callMe}" when it's natural. Today is ${new Date().toDateString()}.`;
+  system += `\n\nThe user's name is ${data.settings.userName || 'not set'}; call them "${callMe}" when it's natural. Today is ${new Date().toDateString()}. They're on ${process.platform === 'win32' ? 'Windows' : 'macOS'}.`;
   const mem = memoryForPrompt();
   if (mem && mem.replace(/##.*$/gm, '').trim()) system += `\n\nMEMORY.txt (what ${callMe} wants every node to know; use it when relevant, never recite it):\n${mem}`;
-  if (req.folder) system += `\n\nThe chat's project folder is ${req.folder}.`;
+  const permText = {
+    ask: 'Permission mode is "Ask me": every file change and command asks the user first. That is fine; go ahead and they will approve or decline.',
+    edit: 'Permission mode is "Auto-edit": you may create and edit files in the workspace freely. Commands ask the user first.',
+    plan: 'Permission mode is "Plan first": do not change anything. Look around if useful (read files, search), then reply with a short numbered plan and ask whether to go ahead.',
+    full: 'Permission mode is "Full trust": you can change files and run commands without asking. Be careful and explain what you did.',
+  }[permission];
+  const apps = Object.entries(connected).filter(([, v]) => v).map(([k]) => ({ github: 'GitHub', google: 'Gmail, Google Drive and Google Calendar', notion: 'Notion' })[k]);
+  system += `\n\nHOW YOU WORK
+- You're an agent running on ${callMe}'s computer, chatting with them in an iMessage-style app. Write like a thoughtful person texting: warm, natural and to the point. Short paragraphs; Markdown only when it helps (code, steps, tables).
+- Have a normal conversation. If ${callMe} asks a question or wants your view, just answer it. Don't create files, run commands or start building unless they ask you to make, build, fix or change something.
+- Before bigger jobs, or when something important is unclear, call ask_user with 2-4 short options instead of guessing. One question at a time.
+- Your workspace folder is ${cwd}. Files you create go there. ${permText}
+- When you build a website or web app, put it in the workspace and call preview_site so ${callMe} can see it running on localhost.
+- ${web ? 'When you need current or factual information, call web_search with your own precise query (not the user\'s raw message), read the best pages, and cite them as [1], [2].' : 'Web access is off in this chat. If you need it, say so.'}
+- Connected apps you can use: ${apps.length ? apps.join(', ') : 'none yet (the user can connect GitHub, Google and Notion in Settings › Apps)'}.
+- After using tools, end with a short message saying what you did and what's next.
+- You can add an iMessage-style reaction to the user's message with the react tool when it feels natural, like a friend would. Don't overdo it.`;
+  if (thinking === 'high') system += '\n- Think carefully, consider alternatives and check your work before answering.';
+  if (thinking === 'off') system += '\n- Be quick: answer directly without long deliberation.';
+  if (req.lowercase) system += `\n- ${callMe} is writing in all lowercase, so reply entirely in lowercase too, casual like them. Code, file names, URLs and identifiers stay exactly as they are.`;
   if (req.roomNote) system += '\n\n' + req.roomNote;
-
-  let sources = [];
-  if (web) {
-    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-    if (lastUser) {
-      emit({ type: 'tool', text: 'WebSearch(' + lastUser.content.split('\n\n[Attached file')[0].slice(0, 60) + ')' });
-      const q = lastUser.content.split('\n\n[Attached file')[0].slice(0, 300);
-      const r = await search(q, searchCfg());
-      sources = r.results;
-      emit({ type: 'sources', sources, engine: r.engine, pageUrl: r.pageUrl });
-      if (sources.length) {
-        let pages = [];
-        if (data.settings.readPages) {
-          emit({ type: 'tool', text: `ReadPages(${Math.min(3, sources.length)} results)` });
-          pages = await Promise.all(sources.slice(0, 3).map((s) => readPage(s.url)));
-        }
-        system += '\n\nWeb results for the latest message (cite as [n] when you use them):\n' + sources.map((s, i) => `[${i + 1}] ${s.title}\n${s.url}\n${s.snippet}${pages[i] ? `\nPage text: ${pages[i]}` : ''}`).join('\n\n');
-      }
-    }
-  }
   emit({ type: 'system', chars: system.length });
+
+  // Agent tools and the bridge to the window for approvals and questions.
+  const sources = [];
+  const env = await cli.childEnv();
+  const ask = (type, payload) =>
+    new Promise((resolve) => {
+      const id = Math.random().toString(36).slice(2);
+      agentPending.set(id, { resolve, reqId });
+      emit({ type, id, ...payload });
+      ctrl.signal.addEventListener('abort', () => agentPending.has(id) && (agentPending.delete(id), resolve(null)));
+    });
+  const google = { get: () => JSON.parse(keys['conn:google'] || 'null'), set: (v) => ((keys['conn:google'] = JSON.stringify(v)), saveKeys()) };
+  const toolCtx = {
+    cwd, permission, env, signal: ctrl.signal, emit, connected, google,
+    tokens: { github: keys['conn:github'], notion: keys['conn:notion'] },
+    approve: (o) => ask('approve', o).then((v) => v === true),
+    ask: (o) => ask('ask', o),
+    react: (emoji) => emit({ type: 'react', emoji }),
+    openUrl: (url) => win && !win.isDestroyed() && win.webContents.send('browser:open', url),
+    search: async (q) => {
+      const r = await search(q, searchCfg());
+      for (const x of r.results) if (!sources.some((s2) => s2.url === x.url)) sources.push(x);
+      emit({ type: 'sources', sources: sources.slice(0, 12), engine: r.engine });
+      return r;
+    },
+    readPage: (u) => readPage(u, 8000),
+    preview: (dir) => preview.start(dir, { which: cli.which, env, emit }),
+  };
+  const toolList = data.settings.localOnly ? tools.defs({ web: false, connected: {} }) : tools.defs({ web, connected });
 
   let chain = engine.buildChain({
     agent: req.noFallback ? { ...node, engines: [], autoFallback: false } : node, pinned, providerCfgs: data.providers, providerOrder: data.providerOrder, keys, autoFallback: data.settings.autoFallback,
@@ -586,15 +641,82 @@ ipcMain.handle('chat:start', async (e, req) => {
   const result = await engine.run({
     chain, providerCfgs: data.providers, keys, system, messages, temperature: node.temperature ?? 0.5, signal: ctrl.signal,
     timeouts: { first: data.settings.firstTokenTimeout, idle: data.settings.idleTimeout }, emit, maxAttempts: data.settings.maxAttempts,
-    cwd: req.folder || data.settings.defaultFolder || os.homedir(), allowEdits: !!req.allowEdits,
+    cwd, permission, thinking, tools: toolList, runTool: (name, args) => tools.run(name, args, toolCtx),
   });
   running.delete(reqId);
   const inTok = Math.round((system.length + messages.reduce((n, m) => n + m.content.length, 0)) / 3.7);
   for (const a of result.attempts) bumpStat(a.provider, a.ok, a.ms, inTok, a.ok ? Math.round(outChars / 3.7) : 0);
   if (result.ok && data.usage[result.provider]?.exhausted) data.usage[result.provider].exhausted = false;
   save();
-  return { ...result, sources, text: undefined, systemChars: system.length, ctx: result.ok ? contextWindow(result.provider, result.model) : null };
+  return { ...result, sources, cwd, text: undefined, systemChars: system.length, ctx: result.ok ? contextWindow(result.provider, result.model) : null };
 });
+const agentPending = new Map();
+ipcMain.on('agent:reply', (_e, { id, value }) => {
+  const p = agentPending.get(id);
+  if (p) {
+    agentPending.delete(id);
+    p.resolve(value);
+  }
+});
+function connectedApps() {
+  return { github: !!keys['conn:github'], google: !!keys['conn:google'], notion: !!keys['conn:notion'] };
+}
+ipcMain.handle('apps:state', async () => {
+  const d = await preview.dockerStatus(cli.which);
+  return { connectors: connectors.CONNECTORS, connected: connectedApps(), info: data.connections || {}, docker: { installed: d.installed, running: d.running, version: d.version || '' }, previews: preview.list() };
+});
+ipcMain.handle('apps:token', async (_e, id, token) => {
+  data.connections = data.connections || {};
+  if (!token) {
+    delete keys['conn:' + id];
+    delete data.connections[id];
+    saveKeys();
+    save();
+    return { ok: true };
+  }
+  token = String(token).trim();
+  try {
+    if (id === 'github') {
+      const r = await fetch('https://api.github.com/user', { headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Nodes' } });
+      if (!r.ok) throw new Error(r.status === 401 ? 'GitHub rejected that token' : 'GitHub error ' + r.status);
+      const u = await r.json();
+      data.connections.github = { login: u.login, name: u.name || u.login, at: Date.now() };
+    } else if (id === 'notion') {
+      const r = await fetch('https://api.notion.com/v1/users/me', { headers: { Authorization: `Bearer ${token}`, 'Notion-Version': '2022-06-28' } });
+      if (!r.ok) throw new Error(r.status === 401 ? 'Notion rejected that secret' : 'Notion error ' + r.status);
+      const u = await r.json();
+      data.connections.notion = { name: u.bot?.workspace_name || u.name || 'Notion', at: Date.now() };
+    }
+    keys['conn:' + id] = token;
+    saveKeys();
+    save();
+    return { ok: true, info: data.connections[id] };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle('apps:google', async (_e, clientId, clientSecret) => {
+  try {
+    const r = await connectors.googleSignIn({ clientId: String(clientId).trim(), clientSecret: String(clientSecret || '').trim(), openExternal: (u) => shell.openExternal(u) });
+    keys['conn:google'] = JSON.stringify({ ...r, clientId: String(clientId).trim(), clientSecret: String(clientSecret || '').trim() });
+    saveKeys();
+    data.connections = data.connections || {};
+    data.connections.google = { email: r.email, at: Date.now() };
+    save();
+    return { ok: true, info: data.connections.google };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle('preview:start', async (_e, dir) => {
+  try {
+    const r = await preview.start(dir, { which: cli.which, env: await cli.childEnv() });
+    return { ok: true, ...r };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle('workspace:default', (_e, nodeName) => tools.defaultWorkspace(nodeName));
 ipcMain.handle('chat:stop', (_e, reqId) => {
   const c = running.get(reqId);
   if (c) c.abort();
@@ -617,6 +739,7 @@ app.whenReady().then(async () => {
 });
 app.on('before-quit', () => {
   phone.stop();
+  preview.stopAll();
   if (data) flush();
 });
 app.on('window-all-closed', () => process.platform !== 'darwin' && app.quit());

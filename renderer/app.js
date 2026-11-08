@@ -124,7 +124,7 @@ async function boot() {
   applyAccent();
   memoryText = (await api.getMemory()).text;
   $('.splash-logo').outerHTML = logoSVG(132, true);
-  const map = { home: 'home', chat: 'chat', projects: 'briefcase', library: 'book', automations: 'zap', nodes: 'grid', engines: 'plug', activity: 'activity', settings: 'settings', phone: 'phone' };
+  const map = { home: 'home', chat: 'chat', projects: 'briefcase', library: 'book', automations: 'zap', apps: 'apps', nodes: 'grid', engines: 'plug', activity: 'activity', settings: 'settings', phone: 'phone' };
   $$('.rail-btn').forEach((b) => (b.innerHTML = icon(map[b.dataset.view || b.dataset.action], 19)));
   $('.brand-mark').innerHTML = logoSVG(20);
   $('#btn-new').innerHTML = icon('plus', 17);
@@ -159,8 +159,8 @@ async function boot() {
   setupBrowser();
   document.addEventListener('click', onGlobalClick);
   document.addEventListener('keydown', (e) => e.key === 'Escape' && closeLayer());
-  api.onChatEvent(onChatEvent);
-  api.onMenu(onMenu);
+  api.onChatEvent((ev) => onChatEvent(ev));
+  api.onMenu((ch) => onMenu(ch));
   api.onBrowserOpen((url) => openBrowser(url));
   api.onRefresh(async () => {
     const st = await api.getState();
@@ -170,7 +170,7 @@ async function boot() {
     renderSidebar();
     if (view !== 'chat') renderMain();
   });
-  api.onPhoneAction(onPhoneAction);
+  api.onPhoneAction((a) => onPhoneAction(a));
 
   const start = () => {
     if (!S.settings.onboarded) return startOnboarding();
@@ -1073,7 +1073,6 @@ function onChatEvent(ev) {
       return;
     case 'sources':
       m.sources = ev.sources;
-      if (S.settings.browserAutoOpen && ev.pageUrl && conv.id === currentId) openBrowser(ev.pageUrl);
       break;
     case 'reasoning':
       if (!m.reasoningStart) m.reasoningStart = Date.now();
@@ -2061,4 +2060,6 @@ async function finishOnboarding() {
   render();
 }
 
-boot();
+// Start once every script (extras, agent, team) has loaded, so their overrides are in place.
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+else boot();

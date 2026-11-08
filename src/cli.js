@@ -212,19 +212,32 @@ function buildPrompt(system, messages) {
   return p;
 }
 
-function argsFor(id, prompt, { allowEdits, model }) {
+// permission: 'ask' (read-only, propose changes), 'edit' (may change files), 'plan' (plan only), 'full' (no limits)
+// thinking: 'off' | 'low' | 'medium' | 'high'
+function argsFor(id, prompt, { permission = 'ask', model, thinking = 'off' }) {
   const m = model && model !== 'default' ? model : null;
+  const edit = permission === 'edit' || permission === 'full';
   switch (id) {
-    case 'codex':
-      return ['exec', '--json', '--skip-git-repo-check', '-s', allowEdits ? 'workspace-write' : 'read-only', ...(m ? ['-m', m] : []), prompt];
-    case 'claude-code':
-      return ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', allowEdits ? 'acceptEdits' : 'default', ...(allowEdits ? [] : ['--allowedTools', 'Read,Grep,Glob,WebSearch,WebFetch']), ...(m ? ['--model', m] : []), prompt];
-    case 'gemini-cli':
-      return ['-p', prompt, '--output-format', 'stream-json', '--skip-trust', '--approval-mode', allowEdits ? 'auto_edit' : 'default', ...(m ? ['-m', m] : [])];
-    case 'qwen-code':
-      return ['-p', prompt, '--output-format', 'stream-json', ...(allowEdits ? ['--approval-mode', 'auto-edit'] : []), ...(m ? ['-m', m] : [])];
+    case 'codex': {
+      const sandbox = permission === 'full' ? ['--dangerously-bypass-approvals-and-sandbox'] : ['-s', edit ? 'workspace-write' : 'read-only'];
+      const effort = thinking && thinking !== 'off' ? ['-c', `model_reasoning_effort="${thinking}"`] : [];
+      return ['exec', '--json', '--skip-git-repo-check', ...sandbox, ...effort, ...(m ? ['-m', m] : []), prompt];
+    }
+    case 'claude-code': {
+      const mode = { ask: 'default', edit: 'acceptEdits', plan: 'plan', full: 'bypassPermissions' }[permission] || 'default';
+      const readOnly = permission === 'ask' ? ['--allowedTools', 'Read,Grep,Glob,WebSearch,WebFetch'] : [];
+      return ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', mode, ...readOnly, ...(m ? ['--model', m] : []), prompt];
+    }
+    case 'gemini-cli': {
+      const mode = { ask: 'default', edit: 'auto_edit', plan: 'default', full: 'yolo' }[permission] || 'default';
+      return ['-p', prompt, '--output-format', 'stream-json', '--skip-trust', '--approval-mode', mode, ...(m ? ['-m', m] : [])];
+    }
+    case 'qwen-code': {
+      const mode = { edit: ['--approval-mode', 'auto-edit'], full: ['--approval-mode', 'yolo'] }[permission] || [];
+      return ['-p', prompt, '--output-format', 'stream-json', ...mode, ...(m ? ['-m', m] : [])];
+    }
     case 'cursor-agent':
-      return ['-p', '--output-format', 'stream-json', ...(allowEdits ? ['--force'] : []), ...(m ? ['-m', m] : []), prompt];
+      return ['-p', '--output-format', 'stream-json', ...(edit ? ['--force'] : []), ...(m ? ['-m', m] : []), prompt];
     case 'opencode':
       return ['run', ...(m ? ['-m', m] : []), prompt];
   }
@@ -269,14 +282,16 @@ function parseLine(id, j, st) {
   return {};
 }
 
-async function runCli({ id, model, system, messages, cwd, allowEdits, signal, onText, onTool }) {
+async function runCli({ id, model, system, messages, cwd, permission, thinking, signal, onText, onTool }) {
   const meta = byId[id];
   const bin = await which(meta.bin);
   if (!bin) throw Object.assign(new Error(`${meta.name} isn't installed`), { cooldown: 600 });
   const prompt = buildPrompt(system, messages);
-  const launch = await resolveLaunch(bin, argsFor(id, prompt, { allowEdits, model }));
+  const launch = await resolveLaunch(bin, argsFor(id, prompt, { permission, model, thinking }));
   if (launch.shell) throw Object.assign(new Error(`${meta.name} can't be started safely on this PC`), { cooldown: 3600 });
-  const child = spawn(launch.cmd, launch.args, { cwd: cwd || HOME, env: await childEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const env = await childEnv();
+  if (id === 'claude-code' && thinking && thinking !== 'off') env.MAX_THINKING_TOKENS = String({ low: 4000, medium: 12000, high: 31999 }[thinking] || 8000);
+  const child = spawn(launch.cmd, launch.args, { cwd: cwd || HOME, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   // On Windows, kill the whole process tree (CLIs start helper processes of their own).
   const kill = () => (IS_WIN && child.pid ? execFile('taskkill', ['/pid', String(child.pid), '/t', '/f'], () => {}) : child.kill('SIGTERM'));
   signal.addEventListener('abort', kill);
@@ -323,4 +338,4 @@ async function runCli({ id, model, system, messages, cwd, allowEdits, signal, on
   }
 }
 
-module.exports = { CLIS, scan, which, openInTerminal, runCli };
+module.exports = { CLIS, scan, which, openInTerminal, runCli, childEnv };
