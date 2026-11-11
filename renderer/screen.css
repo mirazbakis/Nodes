@@ -1,0 +1,72 @@
+/* Always-on-top bar shown while a node controls the screen (renderer/screen.html). */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font: 13px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.sbar {
+  box-sizing: border-box;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px 0 14px;
+  border-radius: 23px;
+  background: rgba(24, 25, 30, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #f2f2f5;
+  -webkit-app-region: drag;
+}
+.dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ff453a;
+  box-shadow: 0 0 0 0 rgba(255, 69, 58, 0.6);
+  animation: pulse 1.6s infinite;
+}
+@keyframes pulse {
+  70% { box-shadow: 0 0 0 7px rgba(255, 69, 58, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 69, 58, 0); }
+}
+.msg {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.key {
+  flex: none;
+  color: #a4a5ae;
+  font-size: 12px;
+}
+.key:empty {
+  display: none;
+}
+#stop {
+  flex: none;
+  -webkit-app-region: no-drag;
+  height: 32px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 16px;
+  background: #ff453a;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+#stop:hover {
+  background: #ff5b52;
+}
+#stop:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}

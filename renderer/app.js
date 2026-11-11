@@ -68,7 +68,7 @@ function convAvatar(conv, size = 40) {
   return av(nodeById(conv.nodeIds[0]), size);
 }
 function pairAvatar(size) {
-  return `<svg class="node-av" width="${size}" height="${size}" viewBox="0 0 64 64" style="border-radius:${Math.round(size * 0.27)}px"><defs><linearGradient id="pg${size}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#16a34a"/></linearGradient></defs><rect width="64" height="64" fill="url(#pg${size})"/><circle cx="23" cy="32" r="10" fill="#f4f7fc"/><circle cx="41" cy="32" r="10" fill="#f4f7fc" opacity=".85"/><path d="M28 32h8" stroke="#0b1020" stroke-width="3" stroke-linecap="round"/><path d="m33 28 4 4-4 4" fill="none" stroke="#0b1020" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  return `<svg class="node-av" width="${size}" height="${size}" viewBox="0 0 64 64" style="border-radius:${Math.round(size * 0.27)}px"><defs><linearGradient id="pg${size}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#16a34a"/></linearGradient></defs><rect width="64" height="64" fill="url(#pg${size})"/><circle cx="23" cy="32" r="10" fill="#f4f7fc"/><circle cx="41" cy="32" r="10" fill="#f4f7fc" opacity=".85"/><path d="M28 32h8" stroke="#0b1020" stroke-width="3" stroke-linecap="round"/><path d="m33 28 4 4-4 4" fill="none" stroke="#0b1020" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><rect class="av-ring" width="64" height="64"/></svg>`;
 }
 function convName(conv) {
   if (conv.kind === 'team') return 'Team';
@@ -121,6 +121,7 @@ function renderMarkdown(text, { highlight = true, sources } = {}) {
 // ---------------- boot ----------------
 async function boot() {
   S = await api.getState();
+  applyTheme(S.settings.theme);
   applyAccent();
   memoryText = (await api.getMemory()).text;
   $('.splash-logo').outerHTML = logoSVG(132, true);
@@ -186,6 +187,15 @@ async function boot() {
     setTimeout(() => $('#splash').classList.add('out'), 1500);
     setTimeout(() => $('#splash').classList.add('hidden'), 2050);
   } else start();
+}
+
+function applyTheme(mode) {
+  mode = mode === 'light' || mode === 'dark' ? mode : 'auto';
+  const el = document.documentElement;
+  if (mode === 'auto') el.removeAttribute('data-theme');
+  else el.setAttribute('data-theme', mode);
+  try { localStorage.setItem('nodes.theme', mode); } catch {}
+  try { api.setTheme && api.setTheme(mode); } catch {}
 }
 
 function applyAccent() {
@@ -267,7 +277,7 @@ function renderSidebar() {
       if (g !== 'Team') html += `<div class="conv-group">${g}</div>`;
       last = g;
     }
-    const lastMsg = [...c.messages].reverse().find((m) => m.content || m.image);
+    const lastMsg = [...c.messages].reverse().find((m) => (m.content || m.image) && m.role !== 'note');
     let preview = lastMsg ? (lastMsg.image ? 'Image: ' + lastMsg.image.prompt : (lastMsg.role === 'user' ? 'You: ' : c.kind === 'team' ? nodeById(lastMsg.nodeId).name + ': ' : '') + lastMsg.content) : '';
     preview = preview.replace(/[#*`>_]|\[DONE\]/g, '').replace(/\s+/g, ' ').slice(0, 100);
     const busy = [...jobs.values()].some((j) => j.convId === c.id);
@@ -824,7 +834,7 @@ function updateCtx() {
   const pct = Math.min(1, info.used / info.win);
   const C = 2 * Math.PI * 8;
   const col = pct > 0.85 ? 'var(--err)' : pct > 0.6 ? 'var(--warn)' : 'var(--muted)';
-  b.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="rgba(255,255,255,.1)" stroke-width="2.4"/><circle cx="10" cy="10" r="8" fill="none" stroke="${col}" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="${Math.max(0.5, pct * C)} ${C}" transform="rotate(-90 10 10)"/></svg>`;
+  b.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--w1)" stroke-width="2.4"/><circle cx="10" cy="10" r="8" fill="none" stroke="${col}" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="${Math.max(0.5, pct * C)} ${C}" transform="rotate(-90 10 10)"/></svg>`;
   b.title = `Context: ${fmtK(info.used)} of ${fmtK(info.win)} tokens (${Math.round(pct * 100)}%)`;
 }
 function ctxPopover(anchor) {
@@ -941,7 +951,7 @@ async function runPair(conv) {
         conv.messages.push({ id: uid(), role: 'banner', content: 'Pair session stopped', ts: Date.now() });
         break outer;
       }
-      const last = conv.messages[conv.messages.length - 1];
+      const last = [...conv.messages].reverse().find((m) => m.role !== 'note');
       if (res !== 'ok') break outer;
       if (/\[DONE\]\s*$/.test(last.content || '')) {
         doneVotes++;
@@ -1774,6 +1784,7 @@ async function renderSettings(main) {
     content = `<div class="set-group">
       <div class="set-row"><div class="l"><b>Your name</b><span>Shown on your messages and exports</span></div><div class="r"><input class="input" id="st-name" value="${esc(s.userName)}" placeholder="Your name"></div></div>
       <div class="set-row"><div class="l"><b>What nodes call you</b><span>A nickname, first name, or anything you like</span></div><div class="r"><input class="input" id="st-call" value="${esc(s.callMe)}" placeholder="${esc(s.userName || 'e.g. boss')}"></div></div>
+      <div class="set-row"><div class="l"><b>Appearance</b><span>Match your Mac, or always use light or dark</span></div><div class="r"><div class="seg" id="st-theme">${[['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => `<button data-theme-set="${k}" class="${(s.theme || 'auto') === k ? 'on' : ''}">${l}</button>`).join('')}</div></div></div>
       <div class="set-row"><div class="l"><b>Accent colour</b><span>Buttons, highlights and your messages</span></div><div class="r"><div class="swatches">${ACCENTS.map((c) => `<button data-acc="${c}" class="${s.accent === c ? 'on' : ''}" style="background:${c}"></button>`).join('')}</div></div></div>
       <div class="set-row"><div class="l"><b>Launch animation</b><span>Play the intro when Nodes opens</span></div><div class="r"><button class="toggle ${s.launchAnimation ? 'on' : ''}" data-t="launchAnimation"></button></div></div>
       <div class="set-row"><div class="l"><b>Default project folder</b><span>${esc(s.defaultFolder || 'None. New chats start without a folder.')}</span></div><div class="r"><button class="btn small" id="st-folder">Choose…</button>${s.defaultFolder ? '<button class="btn small ghost" id="st-folder-clear">Clear</button>' : ''}</div></div>
@@ -1804,6 +1815,11 @@ async function renderSettings(main) {
   $$('[data-t]', main).forEach((b) => b.addEventListener('click', async () => {
     S.settings = await api.updateSettings({ [b.dataset.t]: !S.settings[b.dataset.t] });
     b.classList.toggle('on', S.settings[b.dataset.t]);
+  }));
+  $$('[data-theme-set]', main).forEach((b) => b.addEventListener('click', async () => {
+    applyTheme(b.dataset.themeSet);
+    S.settings = await api.updateSettings({ theme: b.dataset.themeSet });
+    $$('[data-theme-set]', main).forEach((x) => x.classList.toggle('on', x === b));
   }));
   $$('[data-acc]', main).forEach((b) => b.addEventListener('click', async () => {
     S.settings = await api.updateSettings({ accent: b.dataset.acc });
@@ -1985,7 +2001,7 @@ function drawOnboarding() {
       <div class="ob-team">${S.defaultNodes.map((n) => `<button class="pick ${ob.picked.has(n.id) ? 'sel' : ''}" data-pick="${n.id}">${av(n, 40)}<div><b>${esc(n.name)}</b><span>${esc(n.tagline)}</span></div><span class="check">${ob.picked.has(n.id) ? icon('check', 11) : ''}</span></button>`).join('')}</div>
       <div class="section-title">Business pack <span style="font-weight:400;color:var(--faint)">optional</span></div>
       <div class="ob-team">${(S.businessNodes || []).map((n) => `<button class="pick ${ob.picked.has(n.id) ? 'sel' : ''}" data-pick="${n.id}">${av(n, 40)}<div><b>${esc(n.name)}</b><span>${esc(n.tagline)}</span></div><span class="check">${ob.picked.has(n.id) ? icon('check', 11) : ''}</span></button>`).join('')}</div>
-      <div class="set-row" style="border:1px solid var(--line);border-radius:14px;margin-top:14px;background:rgba(255,255,255,.02)"><div class="l" style="display:flex;gap:12px;align-items:center">${teamAvatar([...S.defaultNodes, ...(S.businessNodes || [])].filter((n) => ob.picked.has(n.id)).map((n) => n.avatar), 40)}<div><b>Team chat</b><span>One group chat with every node. The right ones answer, or @mention someone.</span></div></div><div class="r"><button class="toggle ${ob.team ? 'on' : ''}" data-ob="team"></button></div></div></div>`;
+      <div class="set-row" style="border:1px solid var(--line);border-radius:14px;margin-top:14px;background:var(--w02)"><div class="l" style="display:flex;gap:12px;align-items:center">${teamAvatar([...S.defaultNodes, ...(S.businessNodes || [])].filter((n) => ob.picked.has(n.id)).map((n) => n.avatar), 40)}<div><b>Team chat</b><span>One group chat with every node. The right ones answer, or @mention someone.</span></div></div><div class="r"><button class="toggle ${ob.team ? 'on' : ''}" data-ob="team"></button></div></div></div>`;
     foot = `${back}<button class="btn primary big" data-ob="next" ${ob.picked.size ? '' : 'disabled'}>Continue with ${ob.picked.size} node${ob.picked.size === 1 ? '' : 's'}</button>`;
   } else if (ob.step === 4) {
     const picked = [...S.defaultNodes, ...(S.businessNodes || [])].filter((n) => ob.picked.has(n.id));

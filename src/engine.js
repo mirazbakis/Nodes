@@ -150,7 +150,98 @@ function readLimits(id, h, emit) {
 }
 
 // ---------- one attempt ----------
-async function attemptCli({ provider, model, system, messages, signal, timeouts, emit, cwd, permission, thinking }) {
+// CLI agents (Codex, Claude Code, Gemini CLI...) bring their own file and shell tools, and Nodes'
+// tools can't be passed to them. Tools marked `cli: true` (teamwork: assign_task and friends)
+// reach them through a text protocol instead: the agent writes <nodes-tool name="...">{json}
+// </nodes-tool>, Nodes runs it once the CLI finishes, and runs the CLI again with the results.
+const TOOL_OPEN = '<nodes-tool';
+const TOOL_CLOSE = '</nodes-tool>';
+const TOOL_RE = /<nodes-tool\s+name=["']?([\w-]+)["']?\s*>([\s\S]*?)<\/nodes-tool>/g;
+function cliToolNote(list) {
+  const args = (p) => Object.entries((p && p.properties) || {}).map(([k, v]) => `${k}${(p.required || []).includes(k) ? '' : '?'}: ${v.type === 'array' ? 'string[]' : v.type}`).join(', ');
+  return `\n\nNODES TEAM TOOLS\nYou're running inside Nodes, which adds these tools to your own. To use one, write a block like this on its own line in your reply:\n<nodes-tool name="assign_task">{"to": "Ben", "task": "..."}</nodes-tool>\nThe body is JSON. You can write several blocks at once. After the block(s), end your reply; Nodes runs them and sends you the results as messages starting with [Result of ...], then you continue.\n${list.map((t) => `- ${t.name}(${args(t.parameters)}): ${t.description}`).join('\n')}`;
+}
+// Hides tool blocks from the streamed text (they're instructions to Nodes, not for the user).
+function makeToolHider(onText) {
+  let buf = '';
+  let inside = false;
+  return {
+    push(chunk) {
+      buf += chunk;
+      while (buf.length) {
+        if (inside) {
+          const end = buf.indexOf(TOOL_CLOSE);
+          if (end === -1) return void (buf = buf.slice(-TOOL_CLOSE.length));
+          buf = buf.slice(end + TOOL_CLOSE.length);
+          inside = false;
+        } else {
+          const start = buf.indexOf(TOOL_OPEN);
+          if (start === -1) {
+            const lt = buf.lastIndexOf('<');
+            if (lt !== -1 && TOOL_OPEN.startsWith(buf.slice(lt))) {
+              onText(buf.slice(0, lt));
+              return void (buf = buf.slice(lt));
+            }
+            onText(buf);
+            return void (buf = '');
+          }
+          onText(buf.slice(0, start));
+          buf = buf.slice(start);
+          inside = true;
+        }
+      }
+    },
+    flush() {
+      if (!inside && buf) onText(buf);
+      buf = '';
+    },
+  };
+}
+function parseCliTools(raw, allowed) {
+  const out = [];
+  for (const m of String(raw).matchAll(TOOL_RE)) {
+    if (!allowed.has(m[1])) continue;
+    let args = {};
+    try {
+      args = JSON.parse(m[2].trim().replace(/^```(json)?|```$/g, '') || '{}');
+    } catch {
+      args = { _raw: m[2].trim() };
+    }
+    out.push({ name: m[1], args });
+  }
+  return out;
+}
+
+async function attemptCli(opts) {
+  const { signal, emit, runTool } = opts;
+  const list = runTool ? (opts.tools || []).filter((t) => t.cli) : [];
+  if (!list.length) return cliRound(opts);
+  const allowed = new Set(list.map((t) => t.name));
+  const work = opts.work || [...(opts.messages || [])];
+  const system = opts.system + cliToolNote(list);
+  let all = '';
+  for (let round = 0; round < 12; round++) {
+    const r = await cliRound({ ...opts, system, messages: cliMessages(work), allowEmpty: true });
+    if (r.text) all += (all && !all.endsWith('\n') ? '\n\n' : '') + r.text;
+    const calls = parseCliTools(r.raw, allowed);
+    if (!calls.length) {
+      if (!all.trim()) throw new AttemptError('returned an empty reply', { cooldown: 30 });
+      return { text: all.trim() };
+    }
+    const toolCalls = calls.map((c, i) => ({ id: `cli_${round}_${i}`, name: c.name, args: c.args }));
+    work.push({ role: 'assistant', content: r.text || '', tool_calls: toolCalls });
+    for (const tc of toolCalls) {
+      const out = await runTool(tc.name, tc.args, signal, { vision: false });
+      if (signal.aborted) throw new AttemptError('stopped', { fatal: true });
+      work.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: typeof out === 'string' ? out : JSON.stringify(out) });
+    }
+    emit({ type: 'tool', text: 'Note(continuing with the results)' });
+  }
+  return { text: all.trim() || 'I stopped after 12 rounds. Tell me to keep going if you want me to continue.' };
+}
+
+async function cliRound({ provider, model, system, messages, signal, timeouts, emit, cwd, permission, thinking, allowEmpty }) {
+  let raw = '';
   let text = '';
   const ctrl = new AbortController();
   const onOuter = () => ctrl.abort();
@@ -163,11 +254,16 @@ async function attemptCli({ provider, model, system, messages, signal, timeouts,
   };
   const limit = Math.max(timeouts.first, 300);
   arm(limit, `no answer within ${limit}s`);
+  const hider = makeToolHider((t) => {
+    if (!t) return;
+    text += t;
+    emit({ type: 'delta', text: t });
+  });
   const splitter = makeThinkSplitter(
     (t) => {
       if (!t) return;
-      text += t;
-      emit({ type: 'delta', text: t });
+      raw += t;
+      hider.push(t);
     },
     (r) => r && emit({ type: 'reasoning', chars: r.length })
   );
@@ -184,6 +280,7 @@ async function attemptCli({ provider, model, system, messages, signal, timeouts,
       },
     });
     splitter.flush();
+    hider.flush();
   } catch (e) {
     if (signal.aborted) throw new AttemptError('stopped', { fatal: true });
     if (why) throw new AttemptError(why, { cooldown: 60 });
@@ -193,8 +290,8 @@ async function attemptCli({ provider, model, system, messages, signal, timeouts,
     clearTimeout(timer);
     signal.removeEventListener('abort', onOuter);
   }
-  if (!text.trim()) throw new AttemptError('returned an empty reply', { cooldown: 30 });
-  return { text: text.trim() };
+  if (!text.trim() && !(allowEmpty && raw.includes(TOOL_OPEN))) throw new AttemptError('returned an empty reply', { cooldown: 30 });
+  return { text: text.trim(), raw };
 }
 
 // ---------- agent loop for API engines ----------
@@ -202,23 +299,47 @@ async function attemptCli({ provider, model, system, messages, signal, timeouts,
 const EFFORT_RE = /gpt-oss|gpt-5|^o\d|gemini-2\.5|gemini-3|grok-3-mini|grok-4|qwen3|qwen-3|deepseek-r1|magistral|kimi-k2-thinking/i;
 const BUDGET = { low: 2048, medium: 8192, high: 24000 };
 
-function toOpenAI(work) {
-  return work.map((m) => {
-    if (m.role === 'tool') return { role: 'tool', tool_call_id: m.tool_call_id, content: String(m.content ?? '') };
-    if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length)
-      return { role: 'assistant', content: m.content || '', tool_calls: m.tool_calls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: JSON.stringify(t.args || {}) } })) };
-    return { role: m.role, content: m.content };
-  });
+// Screenshots from tools (screen_look) ride on tool entries as m.image = {mime, data}. Only the
+// newest one is sent, and only to engines that can see images; the rest keep their text.
+const VISION_RE = /claude|gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-4\.5|gpt-5|chatgpt|\bo[134](-|$)|gemini|gemma-?3|grok-(2-vision|4)|llama-?4|llama-?3\.2-(11|90)b|vision|[-_.]vl\b|vl[-:]|qwen[\d.]*-?vl|pixtral|mistral-(small|medium)|llava|minicpm-v|moondream|glm-4(\.\d)?v|kimi-vl|kimi-k2\.5|phi-4-multimodal|internvl/i;
+function canSee(provider, model) {
+  if (!provider || provider.kind === 'cli') return false;
+  return provider.kind === 'anthropic' || VISION_RE.test(String(model || ''));
 }
-function toAnthropic(work) {
+function lastImage(work, see) {
+  if (!see) return -1;
+  for (let i = work.length - 1; i >= 0; i--) if (work[i].image) return i;
+  return -1;
+}
+const imgNote = (m, shown) => (m.image && !shown ? '\n[The screenshot is not shown here; call screen_look again to see the screen now.]' : '');
+
+function toOpenAI(work, see) {
+  const li = lastImage(work, see);
+  const out = [];
+  let held = null; // image waits until the run of tool results ends
+  work.forEach((m, i) => {
+    if (held && m.role !== 'tool') out.push(held), (held = null);
+    if (m.role === 'tool') {
+      out.push({ role: 'tool', tool_call_id: m.tool_call_id, content: String(m.content ?? '') + imgNote(m, i === li) });
+      if (i === li) held = { role: 'user', content: [{ type: 'text', text: `Screenshot from ${m.name}:` }, { type: 'image_url', image_url: { url: `data:${m.image.mime};base64,${m.image.data}` } }] };
+    } else if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length)
+      out.push({ role: 'assistant', content: m.content || '', tool_calls: m.tool_calls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: JSON.stringify(t.args || {}) } })) });
+    else out.push({ role: m.role, content: m.content });
+  });
+  if (held) out.push(held);
+  return out;
+}
+function toAnthropic(work, see) {
+  const li = lastImage(work, see);
   const out = [];
   const push = (role, blocks) => {
     const last = out[out.length - 1];
     if (last && last.role === role) last.content.push(...blocks);
     else out.push({ role, content: blocks });
   };
-  for (const m of work) {
-    if (m.role === 'tool') push('user', [{ type: 'tool_result', tool_use_id: m.tool_call_id, content: String(m.content ?? '') }]);
+  for (const [i, m] of work.entries()) {
+    if (m.role === 'tool' && i === li) push('user', [{ type: 'tool_result', tool_use_id: m.tool_call_id, content: [{ type: 'text', text: String(m.content ?? '') || ' ' }, { type: 'image', source: { type: 'base64', media_type: m.image.mime, data: m.image.data } }] }]);
+    else if (m.role === 'tool') push('user', [{ type: 'tool_result', tool_use_id: m.tool_call_id, content: String(m.content ?? '') + imgNote(m, false) }]);
     else if (m.role === 'assistant') {
       const blocks = [];
       if (m.content) blocks.push({ type: 'text', text: m.content });
@@ -274,7 +395,7 @@ async function oneRound({ provider, cfg, key, model, system, work, temperature, 
   const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...authHeaders(provider, key), ...(provider.headers || {}) };
   const thinkOn = thinking && thinking !== 'off';
   if (provider.kind === 'anthropic') {
-    body = { model, system, messages: toAnthropic(work), max_tokens: 16000, stream: true, temperature: Math.min(1, temperature) };
+    body = { model, system, messages: toAnthropic(work, true), max_tokens: 16000, stream: true, temperature: Math.min(1, temperature) };
     if (tools && tools.length) body.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
     else if (thinkOn) {
       body.thinking = { type: 'enabled', budget_tokens: BUDGET[thinking] || 8192 };
@@ -282,7 +403,7 @@ async function oneRound({ provider, cfg, key, model, system, work, temperature, 
       body.max_tokens = (BUDGET[thinking] || 8192) + 8000;
     }
   } else {
-    body = { model, stream: true, messages: [{ role: 'system', content: system }, ...toOpenAI(work)] };
+    body = { model, stream: true, messages: [{ role: 'system', content: system }, ...toOpenAI(work, canSee(provider, model))] };
     if (!/^(o\d|gpt-5)/.test(model) && provider.id !== 'pollinations') body.temperature = temperature;
     if (tools && tools.length) body.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
     if (thinkOn && EFFORT_RE.test(model)) body.reasoning_effort = thinking;
@@ -419,9 +540,10 @@ async function attempt(opts) {
     if (r.toolCalls.length && opts.runTool) {
       work.push({ role: 'assistant', content: r.text || '', tool_calls: r.toolCalls });
       for (const tc of r.toolCalls) {
-        const out = await opts.runTool(tc.name, tc.args, opts.signal);
+        const out = await opts.runTool(tc.name, tc.args, opts.signal, { vision: canSee(opts.provider, opts.model) });
         if (opts.signal.aborted) throw new AttemptError('stopped', { fatal: true });
-        work.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: typeof out === 'string' ? out : JSON.stringify(out) });
+        const img = out && typeof out === 'object' && out.image; // {text, image} from screen_look
+        work.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: typeof out === 'string' ? out : img ? String(out.text || '') : JSON.stringify(out), ...(img ? { image: img } : {}) });
       }
       continue;
     }
@@ -528,4 +650,4 @@ async function fetchModels(provider, cfg, key) {
   return [...new Set(ids)].sort();
 }
 
-module.exports = { run, buildChain, fetchModels, attempt, clearCooldowns, isCooling, usable, AttemptError };
+module.exports = { run, buildChain, fetchModels, attempt, clearCooldowns, isCooling, usable, AttemptError, canSee, toOpenAI, toAnthropic };

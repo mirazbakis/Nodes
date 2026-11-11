@@ -1,6 +1,11 @@
 // Small platform layer: tags <html> with "mac" or "win" for styling, and on Windows
 // adapts Mac wording and shortcut symbols in everything the UI renders.
 (function () {
+  // Apply the saved appearance before first paint (the settings file loads later and confirms it).
+  try {
+    const t = localStorage.getItem('nodes.theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch {}
   const IS_WIN = /^Win/i.test(navigator.platform || '') || /Windows/i.test(navigator.userAgent);
   window.IS_WIN = IS_WIN;
   document.documentElement.classList.add(IS_WIN ? 'win' : 'mac');

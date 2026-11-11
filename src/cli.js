@@ -37,13 +37,26 @@ const CLIS = [
     install: 'npm install -g @google/gemini-cli', login: 'gemini',
     status: async () => {
       const g = path.join(HOME, '.gemini');
-      if (fs.existsSync(path.join(g, 'oauth_creds.json')) || process.env.GEMINI_API_KEY) return { signedIn: true };
+      if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_USE_VERTEXAI) return { signedIn: true };
+      let type = '';
       try {
         const s = JSON.parse(fs.readFileSync(path.join(g, 'settings.json'), 'utf8'));
-        return { signedIn: !!(s.security?.auth?.selectedType || s.selectedAuthType) };
-      } catch {
-        return { signedIn: false };
+        type = String(s.security?.auth?.selectedType || s.selectedAuthType || '');
+      } catch {}
+      if (fs.existsSync(path.join(g, 'oauth_creds.json'))) return { signedIn: true };
+      if (!type) return { signedIn: false };
+      // Newer versions keep the Google sign-in or API key in the system keychain instead of a file.
+      if (!IS_WIN && /oauth|api-key/i.test(type)) {
+        const svc = /api-key/i.test(type) ? 'gemini-cli-api-key' : 'gemini-cli-oauth';
+        const ok = await new Promise((r) => execFile('/usr/bin/security', ['find-generic-password', '-s', svc], (e) => r(!e)));
+        if (!ok && /oauth/i.test(type)) {
+          // service names vary between versions; fall back to any gemini-cli entry
+          const dump = await new Promise((r) => execFile('/usr/bin/security', ['find-generic-password', '-s', 'gemini-cli-oauth-token'], (e) => r(!e)));
+          return { signedIn: dump };
+        }
+        return { signedIn: ok };
       }
+      return { signedIn: true };
     },
   },
   {
@@ -94,6 +107,11 @@ function searchDirs() {
   try {
     const nvm = path.join(HOME, '.nvm', 'versions', 'node');
     for (const v of fs.readdirSync(nvm).sort().reverse()) dirs.push(path.join(nvm, v, 'bin'));
+  } catch {}
+  dirs.push(path.join(HOME, 'bin'), path.join(HOME, '.volta', 'bin'), path.join(HOME, '.fnm', 'aliases', 'default', 'bin'), path.join(HOME, '.local', 'share', 'fnm', 'aliases', 'default', 'bin'), path.join(HOME, 'Library', 'pnpm'), path.join(HOME, '.yarn', 'bin'), '/opt/homebrew/sbin', '/usr/local/sbin');
+  try {
+    const fnm = path.join(HOME, '.local', 'share', 'fnm', 'node-versions');
+    for (const v of fs.readdirSync(fnm).sort().reverse()) dirs.push(path.join(fnm, v, 'installation', 'bin'));
   } catch {}
   return dirs;
 }
@@ -331,6 +349,9 @@ async function runCli({ id, model, system, messages, cwd, permission, thinking, 
   signal.removeEventListener('abort', kill);
   if (signal.aborted) throw Object.assign(new Error('stopped'), { fatal: true });
   if (!gotText) {
+    const raw = `${errMsg || ''} ${errBuf}`;
+    if (id === 'gemini-cli' && /API key not valid|UNAUTHENTICATED|ACCESS_TOKEN_TYPE_UNSUPPORTED|"code": ?401|credentials/i.test(raw)) throw Object.assign(new Error('not signed in'), { cooldown: 900 });
+    if (id === 'gemini-cli' && /RESOURCE_EXHAUSTED|quota|"code": ?429/i.test(raw)) throw Object.assign(new Error('usage limit reached'), { cooldown: 600 });
     const e = errMsg || short(errBuf.split('\n').filter((l) => /error|denied|login|auth|limit|quota|unavailable|not/i.test(l)).pop() || `exited with code ${code}`, 160);
     const low = e.toLowerCase();
     const cooldown = /login|auth|sign/.test(low) ? 900 : /limit|quota|429|usage/.test(low) ? 600 : 60;

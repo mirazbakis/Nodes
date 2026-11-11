@@ -72,6 +72,7 @@ function chatView(scroll) {
   const busy = conv.messages.some((m) => m.role === 'ai' && !m.meta && !m.error && !m.stopped && !m.greeting && !m.image && conv.messages.indexOf(m) === conv.messages.length - 1 && Date.now() - m.ts < 600000);
   const msgs = conv.messages.map((m) => {
     if (m.role === 'banner') return `<div class="banner">${esc(m.content)}</div>`;
+    if (m.role === 'note') return `<div class="banner">${esc(nodeById(m.nodeId).name)} · ${esc(m.content)}</div>`;
     if (m.role === 'user') return `<div class="m u"><div>${esc(m.content)}</div></div>`;
     const n = nodeById(m.nodeId);
     const name = m.label || n.name;

@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('nodes', {
   setSearchKey: inv('search:key'),
   testSearch: inv('search:test'),
   updateSettings: inv('settings:update'),
+  setTheme: inv('theme:set'),
   resetStats: inv('stats:reset'),
   clearUsage: inv('usage:clear'),
   setAutomations: inv('automations:set'),
@@ -66,4 +67,9 @@ contextBridge.exposeInMainWorld('nodes', {
   onMenu: on('menu'),
   onBrowserOpen: on('browser:open'),
   onRefresh: on('state:refresh'),
+  screenStop: inv('screen:stop'),
+  screenState: inv('screen:state'),
+  screenSettings: inv('screen:settings'),
+  onScreenState: on('screen:state'),
+  onScreenStopped: on('screen:stopped'),
 });

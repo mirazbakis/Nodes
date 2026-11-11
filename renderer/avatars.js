@@ -64,6 +64,7 @@
       ${eyes(spec.eyes, c1)}
       ${mouth(spec.mouth)}
       ${spec.mouth === 'smile' || spec.eyes === 'wide' ? `<circle cx="20.5" cy="41" r="2.3" fill="${c1}" opacity=".35"/><circle cx="43.5" cy="41" r="2.3" fill="${c1}" opacity=".35"/>` : ''}
+      <rect class="av-ring" width="64" height="64"/>
     </svg>`;
   }
 
@@ -77,7 +78,7 @@
       const [c1] = s.bg;
       return `<g transform="translate(${x} ${y})"><rect width="32" height="32" fill="${c1}"/><rect x="7" y="9" width="18" height="16" rx="5" fill="#f4f7fc"/><circle cx="12.5" cy="16.5" r="2" fill="${INK}"/><circle cx="19.5" cy="16.5" r="2" fill="${INK}"/><path d="M13.5 21q2.5 2 5 0" stroke="${INK}" stroke-width="1.6" fill="none" stroke-linecap="round"/></g>`;
     });
-    return `<svg class="node-av" width="${size}" height="${size}" viewBox="0 0 64 64" style="border-radius:${r}px;clip-path:inset(0 round ${r}px)"><defs><radialGradient id="${id}" cx=".3" cy=".15" r=".9"><stop offset="0" stop-color="#fff" stop-opacity=".25"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>${cells.join('')}<rect width="64" height="64" fill="url(#${id})"/><path d="M32 0v64M0 32h64" stroke="rgba(0,0,0,.25)" stroke-width="1.5"/></svg>`;
+    return `<svg class="node-av" width="${size}" height="${size}" viewBox="0 0 64 64" style="border-radius:${r}px;clip-path:inset(0 round ${r}px)"><defs><radialGradient id="${id}" cx=".3" cy=".15" r=".9"><stop offset="0" stop-color="#fff" stop-opacity=".25"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>${cells.join('')}<rect width="64" height="64" fill="url(#${id})"/><path d="M32 0v64M0 32h64" stroke="rgba(0,0,0,.25)" stroke-width="1.5"/><rect class="av-ring" width="64" height="64"/></svg>`;
   }
 
   // Random spec for new custom nodes.

@@ -78,7 +78,7 @@ async function runRelay(conv) {
         conv.status = 'blocked';
         break outer;
       }
-      const last = conv.messages[conv.messages.length - 1];
+      const last = [...conv.messages].reverse().find((m) => m.role !== 'note');
       if (/\[DONE\]\s*$/.test(last.content || '')) {
         doneStreak++;
         if (doneStreak >= Math.min(2, members.length)) {

@@ -7,7 +7,7 @@ const PROVIDERS = [
   // Coding CLIs: run on the user's own subscriptions. Usable once installed and signed in.
   { id: 'codex', name: 'Codex', kind: 'cli', keyless: true, cliEngine: true, note: 'Runs OpenAI Codex with your ChatGPT sign-in. Can read your project folder.', models: ['default'] },
   { id: 'claude-code', name: 'Claude Code', kind: 'cli', keyless: true, cliEngine: true, note: 'Runs Claude Code with your Claude sign-in. Can read your project folder.', models: ['default', 'sonnet', 'opus', 'haiku'] },
-  { id: 'gemini-cli', name: 'Gemini CLI', kind: 'cli', keyless: true, free: true, cliEngine: true, note: 'Runs Gemini CLI with your Google sign-in. Free daily quota.', models: ['default', 'gemini-2.5-pro', 'gemini-2.5-flash'] },
+  { id: 'gemini-cli', name: 'Gemini CLI', kind: 'cli', keyless: true, free: true, cliEngine: true, note: 'Runs Gemini CLI with your Google sign-in. Free daily quota.', models: ['default', 'gemini-2.5-pro', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'] },
   { id: 'qwen-code', name: 'Qwen Code', kind: 'cli', keyless: true, free: true, cliEngine: true, note: 'Runs Qwen Code with your Qwen sign-in or local models.', models: ['default'] },
   { id: 'cursor-agent', name: 'Cursor', kind: 'cli', keyless: true, cliEngine: true, note: 'Runs the Cursor agent with your Cursor plan.', models: ['default'] },
   { id: 'opencode', name: 'OpenCode', kind: 'cli', keyless: true, cliEngine: true, note: 'Runs OpenCode with whatever providers it has set up.', models: ['default'] },

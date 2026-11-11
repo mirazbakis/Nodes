@@ -29,7 +29,7 @@ function dayLabel(ts) {
   return `<b>${day}</b> ${fmtTime(ts)}`;
 }
 const multi = (conv) => conv.kind !== 'node';
-const senderKey = (m) => (m.role === 'user' ? 'me' : m.role === 'banner' ? 'banner' : (m.side || m.nodeId || '') + (m.groupId || ''));
+const senderKey = (m) => (m.role === 'user' ? 'me' : m.role === 'banner' || m.role === 'note' ? m.role : (m.side || m.nodeId || '') + (m.groupId || ''));
 
 // ---------------- thread ----------------
 window.renderThread = function () {
@@ -150,7 +150,7 @@ window.aiInner = function (m, conv, compact, first = true, last = true) {
   else if (job && !(m.asks || []).some((a) => a.answer == null) && !(m.approvals || []).some((a) => !a.state)) bubble = `<div class="bubble ai typing ${last ? 'tail' : ''}"><span></span><span></span><span></span></div>`;
   else if (m.stopped) bubble = `<div class="${cls} faint">Stopped.</div>`;
 
-  const cards = [...(m.approvals || []).map((a) => approvalHtml(m, a)), ...(m.asks || []).map((a) => askHtml(m, a))].join('');
+  const cards = [...(m.approvals || []).map((a) => approvalHtml(m, a)), ...(m.asks || []).map((a) => askHtml(m, a))].join('') + (window.assignCardsHtml ? assignCardsHtml(m, conv) : '');
   const files = (m.filesOut || []).length ? `<div class="im-outfiles">${m.filesOut.slice(-8).map((f) => `<button class="file-chip" data-reveal="${esc(f.path)}" title="Show in Finder">${icon('memory', 12)}${esc(f.path.split(/[\\/]/).pop())}<em>${esc(f.action)}</em></button>`).join('')}</div>` : '';
   const sources = m.sources && m.sources.length ? `<div class="sources">${m.sources.slice(0, 6).map((s, i) => `<button class="source" data-src-url="${esc(s.url)}" title="${esc(s.title)}"><img src="https://www.google.com/s2/favicons?sz=32&domain=${esc(hostOf(s.url))}" onerror="this.style.visibility='hidden'"><span>${i + 1}. ${esc(hostOf(s.url))}</span></button>`).join('')}</div>` : '';
   const acts = !job && !m.error && !m.greeting ? `<div class="im-acts">${eng ? `<span class="eng">${esc(eng)}${m.meta ? ` · ${(m.meta.ms / 1000).toFixed(1)}s` : ''}</span>` : ''}<button data-act="react" data-mid="${m.id}" title="React">${icon('heart', 13)}</button>${m.content ? `<button data-act="copy" data-mid="${m.id}" title="Copy">${icon('copy', 13)}</button>` : ''}${conv.kind === 'compare' || conv.kind === 'pair' ? '' : `<button data-act="retry" data-mid="${m.id}" title="Regenerate">${icon('refresh', 13)}</button>`}${m.content ? `<button data-act="remember" data-mid="${m.id}" title="Add to MEMORY.txt">${icon('bookmark', 13)}</button>` : ''}</div>` : '';
@@ -158,13 +158,13 @@ window.aiInner = function (m, conv, compact, first = true, last = true) {
   return `<div class="im-av">${last ? portrait : ''}</div><div class="im-col">${label}${notes.join('')}${cards}${files}${bubble}${sources}${acts}</div>`;
 };
 function stepVerb(v) {
-  return { Create: 'Created', Write: 'Wrote', Edit: 'Edited', Read: 'Read', List: 'Looked in', Bash: 'Ran', WebSearch: 'Searched', Fetch: 'Read', Browse: 'Opened', Preview: 'Previewing', Docker: 'Docker', Github: 'GitHub', Gmail: 'Gmail', Drive: 'Drive', Calendar: 'Calendar', Notion: 'Notion', Redact: 'Hid', Note: 'Note' }[v] || v;
+  return { Create: 'Created', Write: 'Wrote', Edit: 'Edited', Read: 'Read', List: 'Looked in', Bash: 'Ran', WebSearch: 'Searched', Fetch: 'Read', Browse: 'Opened', Preview: 'Previewing', Docker: 'Docker', Github: 'GitHub', Gmail: 'Gmail', Drive: 'Drive', Calendar: 'Calendar', Notion: 'Notion', Redact: 'Hid', Note: 'Note', Team: 'Checked', Assign: 'Assigned', Plan: 'Planned', Wait: 'Waiting on', Post: 'Posted' }[v] || v;
 }
 
 function askHtml(m, a) {
   const done = a.answer != null;
   return `<div class="im-ask ${done ? 'done' : ''}" data-ask="${a.id}" data-mid="${m.id}">
-    <div class="bubble ai q">${esc(a.question)}</div>
+    ${a.by ? `<div class="im-by">${esc(a.by)} asks</div>` : ''}<div class="bubble ai q">${esc(a.question)}</div>
     <div class="im-opts">${(a.options || []).map((o) => `<button class="opt ${a.answer === o ? 'sel' : ''}" ${done ? 'disabled' : ''} data-opt="${esc(o)}">${esc(o)}</button>`).join('')}
     ${a.allowOther && !done ? `<span class="other"><input placeholder="Something else…" data-other><button data-other-go>${icon('send', 12)}</button></span>` : ''}
     ${done && !(a.options || []).includes(a.answer) ? `<button class="opt sel" disabled>${esc(a.answer)}</button>` : ''}</div></div>`;
@@ -216,7 +216,7 @@ function approvalHtml(m, a) {
     const word = done === 'yes' ? (verb === 'Create' ? 'Created' : verb === 'Overwrite' ? 'Overwrote' : verb === 'Edit' ? 'Edited' : kind === 'command' ? 'Ran' : 'Allowed') : 'Declined';
     return `<div class="im-approve compact ${done}" data-approve="${a.id}" data-mid="${m.id}"><button class="ac-row" data-toggle-approve>${done === 'yes' ? '<span class="okc">✓</span>' : '<span class="noc">✕</span>'}<span class="ac-t">${esc(word)}</span><span class="ac-s">${esc(summary)}</span>${icon('chevron', 12)}</button><div class="ac-body">${head}${bodyHtml}</div></div>`;
   }
-  return `<div class="im-approve" data-approve="${a.id}" data-mid="${m.id}">${head}${bodyHtml}
+  return `<div class="im-approve" data-approve="${a.id}" data-mid="${m.id}">${a.by ? `<div class="im-by">${esc(a.by)} is asking</div>` : ''}${head}${bodyHtml}
     <div class="btns"><button class="btn small primary" data-ok="1">${kind === 'command' ? 'Run' : verb === 'Create' ? 'Create file' : 'Allow'}</button>${a.always ? '<button class="btn small" data-ok="always">Always allow in this chat</button>' : ''}<button class="btn small ghost" data-ok="0">Decline</button></div>
   </div>`;
 }
@@ -348,6 +348,7 @@ window.runReply = function (conv, nodeId, opts = {}) {
         reqId, nodeId, messages: historyFor(conv, conv.kind === 'pair' || conv.kind === 'project' ? opts.side : nodeId, msg), pinned: opts.pinned || conv.pinned, web: conv.web !== false,
         noFallback: opts.noFallback ?? (!!conv.pinned && conv.fallback === false), roomNote: opts.roomNote || '', folder: conv.folder || '',
         permission: conv.permission || S.settings.defaultPermission || 'ask', thinking: conv.thinking || S.settings.defaultThinking || 'low', lowercase,
+        ...(window.teamReq ? teamReq(conv, nodeId) : {}),
       });
     } catch (e) {
       res = { ok: false, attempts: [{ provider: 'nodes', model: '', reason: String(e.message || e) }] };
@@ -365,6 +366,7 @@ window.runReply = function (conv, nodeId, opts = {}) {
     if (lowercase && msg.content) msg.content = lowerOutsideCode(msg.content);
     for (const a of msg.asks || []) if (a.answer == null) a.answer = '(no answer)';
     for (const a of msg.approvals || []) if (!a.state) a.state = 'no';
+    for (const t of msg.assigns || []) if (t.state === 'working' || t.state === 'approval') t.state = res.stopped ? 'stopped' : 'failed';
     if (msg.reasoningStart && !msg.thoughtMs) msg.thoughtMs = Date.now() - msg.reasoningStart;
     delete msg.reasoningStart;
     conv.updatedAt = Date.now();
@@ -395,17 +397,17 @@ window.onChatEvent = function (ev) {
   }
   if (ev.type === 'ask') {
     m.asks = m.asks || [];
-    m.asks.push({ id: ev.id, question: ev.question, options: ev.options || [], allowOther: ev.allowOther !== false, answer: null });
+    m.asks.push({ id: ev.id, question: ev.question, options: ev.options || [], allowOther: ev.allowOther !== false, answer: null, by: ev.by });
     updateMessageEl(conv, m);
-    if (conv.id !== currentId) toast(`${nodeById(m.nodeId).name} has a question for you`);
+    if (conv.id !== currentId) toast(`${ev.by || nodeById(m.nodeId).name} has a question for you`);
     return;
   }
   if (ev.type === 'approve') {
     if (conv.alwaysAllow && conv.alwaysAllow[ev.kind] && ev.always !== false) return api.agentReply(ev.id, true);
     m.approvals = m.approvals || [];
-    m.approvals.push({ id: ev.id, kind: ev.kind, title: ev.title, detail: ev.detail, always: ev.always !== false, state: null });
+    m.approvals.push({ id: ev.id, kind: ev.kind, title: ev.title, detail: ev.detail, always: ev.always !== false, state: null, by: ev.by });
     updateMessageEl(conv, m);
-    if (conv.id !== currentId) toast(`${nodeById(m.nodeId).name} needs your OK`);
+    if (conv.id !== currentId) toast(`${ev.by || nodeById(m.nodeId).name} needs your OK`);
     return;
   }
   if (ev.type === 'react') {

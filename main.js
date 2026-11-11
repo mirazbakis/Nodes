@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, shell, dialog, Menu, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, shell, dialog, Menu, nativeTheme, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -12,9 +12,11 @@ const { PhoneServer } = require('./src/phone');
 const tools = require('./src/tools');
 const connectors = require('./src/connectors');
 const preview = require('./src/preview');
+const screenCtl = require('./src/screen');
+const team = require('./src/team');
 
 app.setName('Nodes');
-nativeTheme.themeSource = 'dark';
+nativeTheme.themeSource = 'system';
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 if (IS_WIN) app.setAppUserModelId('com.athenesoftworks.nodes');
@@ -447,6 +449,15 @@ ipcMain.handle('search:test', async (_e, q) => {
   const cfg = searchCfg();
   return search(q || 'electron app framework', cfg);
 });
+ipcMain.handle('theme:set', (_e, mode) => {
+  nativeTheme.themeSource = mode === 'light' || mode === 'dark' ? mode : 'system';
+  const dark = nativeTheme.shouldUseDarkColors;
+  if (!IS_MAC && win && !win.isDestroyed()) {
+    try { win.setTitleBarOverlay({ color: dark ? '#101114' : '#f5f5f7', symbolColor: dark ? '#b9bac3' : '#3c3c43' }); } catch {}
+    try { win.setBackgroundColor(dark ? '#101114' : '#f5f5f7'); } catch {}
+  }
+  return dark;
+});
 ipcMain.handle('settings:update', (_e, patch) => {
   data.settings = { ...data.settings, ...patch };
   save();
@@ -535,11 +546,28 @@ function searchCfg() {
 }
 
 ipcMain.handle('chat:start', async (e, req) => {
+  const ctrl = new AbortController();
+  running.set(req.reqId, ctrl);
+  const send = (ev) => !e.sender.isDestroyed() && e.sender.send('chat:event', { reqId: req.reqId, ...ev });
+  try {
+    return { ...(await runAgent(req, { send, signal: ctrl.signal })), text: undefined };
+  } finally {
+    running.delete(req.reqId);
+  }
+});
+
+// Who a node can hand work to: colleagues at the same company, or your own nodes outside companies.
+const matesFor = (n) => data.nodes.filter((x) => x.id !== n.id && (n.companyId ? x.companyId === n.companyId : !x.companyId));
+
+// One node's agent turn. The user's chats call it through chat:start; teammates given a task
+// (src/team.js) run through it too, with their events routed to the chat of the user's request.
+// opts: { send(ev), signal, team (context when this is an assigned task), by (node name shown on
+// approval cards), onWait(on, what) (an approval or question is waiting on the user) }
+async function runAgent(req, opts) {
   const { reqId, nodeId, pinned } = req;
+  const { send, signal } = opts;
   const web = req.web && !data.settings.localOnly;
   const node = data.nodes.find((a) => a.id === nodeId) || data.nodes[0];
-  const ctrl = new AbortController();
-  running.set(reqId, ctrl);
   let outChars = 0;
   const emit = (ev) => {
     if (ev.type === 'delta') outChars += ev.text.length;
@@ -551,7 +579,7 @@ ipcMain.handle('chat:start', async (e, req) => {
       ev = { ...ev, low: u.exhausted || u.pct < 0.15 };
       if (!ev.low) return;
     }
-    if (!e.sender.isDestroyed()) e.sender.send('chat:event', { reqId, ...ev });
+    send(ev);
   };
   let redacted = 0;
   if (data.settings.redactSecrets) {
@@ -612,6 +640,16 @@ ipcMain.handle('chat:start', async (e, req) => {
     } catch {}
   }
   if (req.roomNote) system += '\n\n' + req.roomNote;
+
+  // Teamwork: hand tasks to teammates and read/post the team feed (src/team.js).
+  let teamCtx = opts.team || null;
+  if (!teamCtx && req.team !== false) {
+    const feedConvId = req.feedConvId || req.convId || null;
+    if (feedConvId && Array.isArray(req.feed)) team.seedFeed(feedConvId, req.feed);
+    const tree = team.newTree({ reqId, send, permission, thinking, web: !!req.web, feedConvId });
+    teamCtx = team.context({ tree, node, matesFor, runAgent, signal, cwd });
+  }
+  system += team.systemFor(teamCtx, callMe);
   emit({ type: 'system', chars: system.length });
 
   // Agent tools and the bridge to the window for approvals and questions.
@@ -620,14 +658,18 @@ ipcMain.handle('chat:start', async (e, req) => {
   const ask = (type, payload) =>
     new Promise((resolve) => {
       const id = Math.random().toString(36).slice(2);
-      agentPending.set(id, { resolve, reqId });
-      emit({ type, id, ...payload });
-      ctrl.signal.addEventListener('abort', () => agentPending.has(id) && (agentPending.delete(id), resolve(null)));
+      const waits = type !== 'browser' && opts.onWait;
+      if (waits) opts.onWait(true, payload.title || payload.question || '');
+      const done = (v) => (waits && opts.onWait(false), resolve(v));
+      agentPending.set(id, { resolve: done, reqId });
+      emit({ type, id, ...payload, ...(opts.by ? { by: opts.by } : {}) });
+      signal.addEventListener('abort', () => agentPending.has(id) && (agentPending.delete(id), done(null)));
     });
   const google = { get: () => JSON.parse(keys['conn:google'] || 'null'), set: (v) => ((keys['conn:google'] = JSON.stringify(v)), saveKeys()) };
   const toolCtx = {
-    cwd, permission, env, signal: ctrl.signal, emit, connected, google,
+    cwd, permission, env, signal, emit, connected, google,
     tokens: { github: keys['conn:github'] },
+    reqId, nodeName: node.name, screenShortcut: SCREEN_KEYS[0].label,
     approve: (o) => ask('approve', o).then((v) => v === true),
     ask: (o) => ask('ask', o),
     react: (emoji) => emit({ type: 'react', emoji }),
@@ -642,7 +684,8 @@ ipcMain.handle('chat:start', async (e, req) => {
     readPage: (u) => readPage(u, 8000),
     preview: (dir) => preview.start(dir, { which: cli.which, env, emit }),
   };
-  const toolList = data.settings.localOnly ? tools.defs({ web: false, connected: {} }) : tools.defs({ web, connected });
+  const toolList = (data.settings.localOnly ? tools.defs({ web: false, connected: {} }) : tools.defs({ web, connected })).concat(team.defs(teamCtx));
+  signal.addEventListener('abort', () => screenCtl.status().id === reqId && screenCtl.stop()); // stopping the chat stops the screen too
 
   let chain = engine.buildChain({
     agent: req.noFallback ? { ...node, engines: [], autoFallback: false } : node, pinned, providerCfgs: data.providers, providerOrder: data.providerOrder, keys, autoFallback: data.settings.autoFallback,
@@ -673,22 +716,29 @@ ipcMain.handle('chat:start', async (e, req) => {
   }
   // Engines known to be out of quota go last.
   chain = [...chain.filter((c) => !data.usage[c.provider]?.exhausted || Date.now() - data.usage[c.provider].at > 30 * 60000 || c === chain[0] && pinned), ...chain.filter((c) => data.usage[c.provider]?.exhausted && Date.now() - data.usage[c.provider].at <= 30 * 60000 && !(c === chain[0] && pinned))];
-  if (!chain.length) {
-    running.delete(reqId);
-    return { ok: false, attempts: [], noProviders: true, sources };
+  if (!chain.length) return { ok: false, attempts: [], noProviders: true, sources };
+  let result;
+  try {
+    result = await engine.run({
+      chain, providerCfgs: data.providers, keys, system, messages, temperature: node.temperature ?? 0.5, signal,
+      timeouts: { first: data.settings.firstTokenTimeout, idle: data.settings.idleTimeout }, emit, maxAttempts: data.settings.maxAttempts,
+      cwd, permission, thinking, tools: toolList,
+      runTool: (name, args, _signal, meta) => {
+        toolCtx.vision = !!(meta && meta.vision);
+        if (team.has(name)) return team.run(name, args, teamCtx, (t) => emit({ type: 'tool', text: t })).catch((err) => `Error: ${err.message || err}`);
+        return tools.run(name, args, toolCtx);
+      },
+    });
+    await team.settle(teamCtx); // tasks it handed out but never waited for still finish
+  } finally {
+    screenCtl.end(reqId);
   }
-  const result = await engine.run({
-    chain, providerCfgs: data.providers, keys, system, messages, temperature: node.temperature ?? 0.5, signal: ctrl.signal,
-    timeouts: { first: data.settings.firstTokenTimeout, idle: data.settings.idleTimeout }, emit, maxAttempts: data.settings.maxAttempts,
-    cwd, permission, thinking, tools: toolList, runTool: (name, args) => tools.run(name, args, toolCtx),
-  });
-  running.delete(reqId);
   const inTok = Math.round((system.length + messages.reduce((n, m) => n + m.content.length, 0)) / 3.7);
   for (const a of result.attempts) bumpStat(a.provider, a.ok, a.ms, inTok, a.ok ? Math.round(outChars / 3.7) : 0);
   if (result.ok && data.usage[result.provider]?.exhausted) data.usage[result.provider].exhausted = false;
   save();
-  return { ...result, sources, cwd, text: undefined, systemChars: system.length, ctx: result.ok ? contextWindow(result.provider, result.model) : null };
-});
+  return { ...result, sources, cwd, systemChars: system.length, ctx: result.ok ? contextWindow(result.provider, result.model) : null };
+}
 const agentPending = new Map();
 ipcMain.on('agent:reply', (_e, { id, value }) => {
   const p = agentPending.get(id);
@@ -867,6 +917,63 @@ ipcMain.handle('chat:stop', (_e, reqId) => {
   return true;
 });
 
+// ---------------- screen control ----------------
+// While a node controls the screen: an always-on-top bar naming it with a Stop button, and a
+// global shortcut. Both call screenCtl.stop(), which kills the running action and drops queued ones.
+const SCREEN_KEYS = IS_WIN
+  ? [{ accel: 'Control+Alt+Escape', label: 'Ctrl+Alt+Esc' }, { accel: 'Control+Shift+F12', label: 'Ctrl+Shift+F12' }]
+  : [{ accel: 'Command+Shift+Escape', label: '⌘⇧Esc' }, { accel: 'Command+Shift+F12', label: '⌘⇧F12' }];
+let screenBar = null;
+let screenKey = null;
+function stopScreen() {
+  const was = screenCtl.stop();
+  if (was && win && !win.isDestroyed()) win.webContents.send('screen:stopped', was);
+}
+function screenBarState(st) {
+  return { ...st, shortcut: screenKey ? screenKey.label : '' };
+}
+screenCtl.onChange((st) => {
+  if (st.active) {
+    if (!screenKey) {
+      for (const k of SCREEN_KEYS) {
+        try {
+          if (globalShortcut.register(k.accel, stopScreen)) {
+            screenKey = k;
+            break;
+          }
+        } catch {}
+      }
+    }
+    if (!screenBar || screenBar.isDestroyed()) {
+      const wa = require('electron').screen.getPrimaryDisplay().workArea; // screen is only usable after ready
+      const W = 420;
+      const H = 46;
+      screenBar = new BrowserWindow({
+        width: W, height: H, x: Math.round(wa.x + (wa.width - W) / 2), y: wa.y + 10,
+        frame: false, transparent: true, resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
+        skipTaskbar: true, alwaysOnTop: true, focusable: false, hasShadow: false, show: false, acceptFirstMouse: true,
+        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+      });
+      screenBar.setAlwaysOnTop(true, 'screen-saver');
+      screenBar.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      screenBar.setContentProtection(true); // keep the bar out of the node's screenshots
+      screenBar.webContents.on('will-navigate', (ev) => ev.preventDefault());
+      screenBar.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      screenBar.loadFile(path.join(__dirname, 'renderer', 'screen.html'));
+      screenBar.webContents.on('did-finish-load', () => screenBar && !screenBar.isDestroyed() && screenBar.webContents.send('screen:state', screenBarState(screenCtl.status())));
+      screenBar.once('ready-to-show', () => screenBar && !screenBar.isDestroyed() && screenBar.showInactive());
+    } else screenBar.webContents.send('screen:state', screenBarState(st));
+  } else {
+    if (screenKey) globalShortcut.unregister(screenKey.accel);
+    screenKey = null;
+    if (screenBar && !screenBar.isDestroyed()) screenBar.destroy();
+    screenBar = null;
+  }
+});
+ipcMain.handle('screen:stop', () => (stopScreen(), true));
+ipcMain.handle('screen:state', () => screenBarState(screenCtl.status()));
+ipcMain.handle('screen:settings', (_e, kind) => screenCtl.openSettings(kind === 'accessibility' ? 'accessibility' : 'screen'));
+
 app.whenReady().then(async () => {
   load();
   if (!fs.existsSync(memoryFile())) fs.writeFileSync(memoryFile(), MEMORY_TEMPLATE);
@@ -882,6 +989,7 @@ app.whenReady().then(async () => {
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 app.on('before-quit', () => {
+  screenCtl.stop();
   phone.stop();
   preview.stopAll();
   if (data) flush();
